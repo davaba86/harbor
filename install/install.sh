@@ -64,6 +64,7 @@ APP_PLIST_PATH="$HOME/Library/LaunchAgents/$APP_PLIST_LABEL.plist"
 sed \
   -e "s#__HARBOR_BINARY__#$HARBOR_BINARY#g" \
   -e "s#__HARBOR_DIR__#$HARBOR_DIR#g" \
+  -e "s#__REPO_DIR__#$REPO_DIR#g" \
   "$REPO_DIR/install/com.harborapp.menubar.plist.template" > "$APP_PLIST_PATH"
 
 launchctl unload "$APP_PLIST_PATH" 2>/dev/null || true

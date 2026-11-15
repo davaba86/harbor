@@ -6,30 +6,36 @@ enum RunState: String, Codable {
     case stale
 }
 
-struct HistoryEntry: Codable, Equatable {
-    let state: RunState
-    let url: String
-    let createdAt: String
-
-    enum CodingKeys: String, CodingKey {
-        case state, url
-        case createdAt = "created_at"
-    }
-}
-
-/// A stage/job's status while a run is in progress — distinct from RunState
-/// because "pending/queued" is a real, meaningful state here (the stage
-/// hasn't started yet) that RunState has no equivalent for, and baking it
-/// into RunState would pollute that enum's other uses (tray icon, worst-state).
+/// A stage/job's status within one run — distinct from RunState because
+/// "pending/queued" is a real, meaningful state here (the stage hasn't
+/// started yet) that RunState has no equivalent for, and baking it into
+/// RunState would pollute that enum's other uses (tray icon, worst-state).
 enum StageState: String, Codable {
     case pending, running, ok, failed
 }
 
 /// One stage (GitLab: validate/test/build/...) or job (GitHub, which has no
-/// stage concept — each job is its own row) in a currently-running pipeline.
+/// stage concept — each job is its own row) within a single run.
 struct RunningStage: Codable, Equatable {
     let name: String
     let status: StageState
+}
+
+struct HistoryEntry: Codable, Equatable {
+    let state: RunState
+    let url: String
+    let createdAt: String
+    // Optional, same reasoning as RepoStatus.history: fetched for every
+    // returned run now (not just the latest), but poll.sh's fallback
+    // entries never populate it.
+    let stages: [RunningStage]?
+
+    enum CodingKeys: String, CodingKey {
+        case state, url, stages
+        case createdAt = "created_at"
+    }
+
+    var stageList: [RunningStage] { stages ?? [] }
 }
 
 struct RepoStatus: Codable, Identifiable {
@@ -52,8 +58,6 @@ struct RepoStatus: Codable, Identifiable {
     // run is actually "running" (it's not worth the extra API call
     // otherwise), and poll.sh's fallback entries never set it at all.
     let currentStep: String?
-    // Same optional-from-the-start reasoning as history/currentStep.
-    let runningStages: [RunningStage]?
 
     enum CodingKeys: String, CodingKey {
         case name, platform, branch, state, label, url
@@ -61,17 +65,12 @@ struct RepoStatus: Codable, Identifiable {
         case fetchedAt = "fetched_at"
         case history
         case currentStep = "current_step"
-        case runningStages = "running_stages"
     }
 
     var recentHistory: [HistoryEntry] { history ?? [] }
     var runningStep: String? {
         guard state == .running, let currentStep, !currentStep.isEmpty else { return nil }
         return currentStep
-    }
-    var stages: [RunningStage] {
-        guard state == .running else { return [] }
-        return runningStages ?? []
     }
 }
 

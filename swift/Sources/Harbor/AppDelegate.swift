@@ -20,8 +20,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var timer: Timer?
     private var lastRepoCount = 0
     private var lastRepoNames: [String] = []
+    private var isRefreshing = false
     private let statusPath = NSString(string: "~/.harbor/status.json").expandingTildeInPath
     private let configPath = NSString(string: "~/.harbor/config.json").expandingTildeInPath
+    // Set by install.sh into the launchd plist's EnvironmentVariables — the
+    // compiled binary has no other way to know where its own source repo
+    // (and therefore bin/poll.sh) lives at runtime. Manual/debug launches
+    // outside launchd won't have this set; "Refresh All" just no-ops then.
+    private let repoDir = ProcessInfo.processInfo.environment["HARBOR_REPO_DIR"]
 
     // Rough per-row heights for auto-sizing the panel to its content. These
     // are estimates of RepoCardView's actual layout — not pixel-exact, but
@@ -88,9 +94,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         panel.delegate = self
 
         hostingController = NSHostingController(
-            rootView: ContentView(status: nil, staleThreshold: 180,
+            rootView: ContentView(status: nil, staleThreshold: 180, isRefreshing: false,
                                    onQuit: { NSApp.terminate(nil) },
-                                   onRevealConfig: { [weak self] in self?.revealConfig() })
+                                   onRevealConfig: { [weak self] in self?.revealConfig() },
+                                   onRefreshAll: { [weak self] in self?.refreshAllNow() })
         )
         panel.contentViewController = hostingController
 
@@ -146,9 +153,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             accessibilityDescription: "Harbor: \(worst.rawValue)"
         )?.withSymbolConfiguration(config)
 
-        hostingController.rootView = ContentView(status: status, staleThreshold: threshold,
+        hostingController.rootView = ContentView(status: status, staleThreshold: threshold, isRefreshing: isRefreshing,
                                                   onQuit: { NSApp.terminate(nil) },
-                                                  onRevealConfig: { [weak self] in self?.revealConfig() })
+                                                  onRevealConfig: { [weak self] in self?.revealConfig() },
+                                                  onRefreshAll: { [weak self] in self?.refreshAllNow() })
+    }
+
+    /// Runs poll.sh + notify.sh right now instead of waiting for launchd's
+    /// own interval, then re-reads the result. Runs off the main thread so
+    /// the UI stays responsive while the API calls are in flight; guarded
+    /// against overlap so mashing the button doesn't stack up processes.
+    private func refreshAllNow() {
+        guard !isRefreshing, let repoDir else { return }
+        isRefreshing = true
+        refresh() // re-render immediately so the button shows "Refreshing…"
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/bash")
+            process.arguments = ["-c", "\(repoDir)/bin/poll.sh && \(repoDir)/bin/notify.sh"]
+            try? process.run()
+            process.waitUntilExit()
+
+            DispatchQueue.main.async {
+                self?.isRefreshing = false
+                self?.refresh()
+            }
+        }
     }
 
     /// Reveals the config file in Finder. Resolves through the symlink first

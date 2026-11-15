@@ -162,13 +162,19 @@ struct RepoCardView: View {
                                 Text("Running · \(step)")
                                     .font(.system(.caption2, design: .monospaced))
                                     .foregroundStyle(RunState.running.color)
-                                if !repo.stages.isEmpty {
-                                    StageListView(stages: repo.stages)
-                                }
                             } else {
                                 Text(formatAge(DisplayState.ageSeconds(fetchedAt: entry.createdAt)))
                                     .font(.system(.caption2, design: .monospaced))
                                     .foregroundStyle(.secondary)
+                            }
+
+                            // Every fetched run now carries its own step
+                            // breakdown (not just the live one), so whichever
+                            // run is selected in the picker shows its real
+                            // stages — a finished run's stages are just all
+                            // ok/failed instead of some still pending.
+                            if !entry.stageList.isEmpty {
+                                StageListView(stages: entry.stageList)
                             }
 
                             if !entry.url.isEmpty {
@@ -241,16 +247,32 @@ struct TestFlightCardView: View {
 struct ContentView: View {
     let status: HarborStatus?
     let staleThreshold: Int
+    let isRefreshing: Bool
     let onQuit: () -> Void
     let onRevealConfig: () -> Void
+    let onRefreshAll: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("HARBOR")
-                .font(.system(.caption, design: .monospaced))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 12)
-                .padding(.top, 10)
+            HStack {
+                Text("HARBOR")
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button(action: onRefreshAll) {
+                    if isRefreshing {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                }
+                .buttonStyle(.plain)
+                .disabled(isRefreshing)
+                .help("Refresh all now")
+                .padding(.trailing, 12)
+            }
+            .padding(.leading, 12)
+            .padding(.top, 10)
 
             if let status, !status.repos.isEmpty || !status.testflightApps.isEmpty {
                 ScrollView {

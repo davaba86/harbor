@@ -5,7 +5,7 @@ final class StatusModelTests: XCTestCase {
     func makeRepo(state: RunState, fetchedAt: String) -> RepoStatus {
         RepoStatus(name: "test-repo", platform: "gitlab", branch: "main",
                    state: state, label: "x", url: "", updatedAt: "", fetchedAt: fetchedAt,
-                   history: [], currentStep: nil, runningStages: nil)
+                   history: [], currentStep: nil)
     }
 
     func testFreshOkStateIsNotStale() {
@@ -84,7 +84,7 @@ final class StatusModelTests: XCTestCase {
 
         let runningWithStep = RepoStatus(name: "x", platform: "gitlab", branch: "main", state: .running,
                                           label: "Running", url: "", updatedAt: "", fetchedAt: "",
-                                          history: [], currentStep: "test", runningStages: nil)
+                                          history: [], currentStep: "test")
         XCTAssertEqual(runningWithStep.runningStep, "test")
 
         // common.sh never actually produces this combination (current_step is
@@ -93,25 +93,28 @@ final class StatusModelTests: XCTestCase {
         // genuinely "running", as a defensive guard against future backend bugs.
         let okWithUnexpectedStep = RepoStatus(name: "x", platform: "gitlab", branch: "main", state: .ok,
                                                label: "OK", url: "", updatedAt: "", fetchedAt: "",
-                                               history: [], currentStep: "test", runningStages: nil)
+                                               history: [], currentStep: "test")
         XCTAssertNil(okWithUnexpectedStep.runningStep)
     }
 
-    func testStagesOnlyShownWhenActuallyRunning() {
+    /// Stages moved from RepoStatus (only the newest, only while running) to
+    /// each HistoryEntry (every fetched run has its own), so the picker can
+    /// show real step detail for any selected run, not just the live one.
+    /// Same missing-key lesson as elsewhere: an entry with no "stages" key
+    /// at all (every entry before this feature shipped, and any of
+    /// poll.sh's fallback paths) must decode cleanly as an empty list.
+    func testHistoryEntryStagesDefaultsToEmptyWhenMissing() throws {
+        let json = """
+        {"state": "ok", "url": "", "created_at": ""}
+        """
+        let decoded = try JSONDecoder().decode(HistoryEntry.self, from: Data(json.utf8))
+        XCTAssertEqual(decoded.stageList, [])
+    }
+
+    func testHistoryEntryStagesPresent() {
         let stages = [RunningStage(name: "validate", status: .ok), RunningStage(name: "test", status: .running)]
-
-        let running = RepoStatus(name: "x", platform: "gitlab", branch: "main", state: .running,
-                                  label: "Running", url: "", updatedAt: "", fetchedAt: "",
-                                  history: [], currentStep: "test", runningStages: stages)
-        XCTAssertEqual(running.stages, stages)
-
-        // Same defensive guard as runningStep: a stale running_stages value
-        // left over once the pipeline has actually finished must not leak
-        // through once state has moved on.
-        let finished = RepoStatus(name: "x", platform: "gitlab", branch: "main", state: .ok,
-                                   label: "OK", url: "", updatedAt: "", fetchedAt: "",
-                                   history: [], currentStep: nil, runningStages: stages)
-        XCTAssertEqual(finished.stages, [])
+        let entry = HistoryEntry(state: .running, url: "", createdAt: "", stages: stages)
+        XCTAssertEqual(entry.stageList, stages)
     }
 
     func makeTestFlight(processing: ProcessingState, review: BetaReviewStatus?) -> TestFlightStatus {

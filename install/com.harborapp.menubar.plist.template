@@ -12,6 +12,11 @@
   <true/>
   <key>KeepAlive</key>
   <true/>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HARBOR_REPO_DIR</key>
+    <string>__REPO_DIR__</string>
+  </dict>
   <key>StandardOutPath</key>
   <string>__HARBOR_DIR__/app.log</string>
   <key>StandardErrorPath</key>

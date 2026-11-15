@@ -84,20 +84,31 @@ harbor::fetch_github() {
     *) state="running"; label="Running" ;;
   esac
 
-  # Only worth the extra API round-trip while a run is actually in progress —
-  # for every other state the step-level detail is moot. GitHub's model is
-  # workflow -> jobs -> steps, with no stage-grouping concept comparable to
-  # GitLab's, so each job is its own row here (no aggregation needed, each
-  # job already carries one status).
-  local current_step="" running_stages="[]"
-  if [ "$state" = "running" ]; then
-    local run_id
-    run_id=$(echo "$run_json" | jq -r '.[0].databaseId // empty')
+  # Fetch EACH returned run's own job list, not just the latest — so the
+  # UI's run picker can show real step-by-step detail for whichever run is
+  # selected, not only the one currently in progress. 3 extra API calls per
+  # repo per poll instead of up to 1; still trivial against GitHub's 5000/hr
+  # limit even across a large watch list. GitHub's model is workflow -> jobs
+  # -> steps with no stage-grouping comparable to GitLab's, so each job is
+  # its own row (no aggregation needed, each job already carries one status).
+  local current_step="" entries="[]"
+  for i in $(seq 0 $((count - 1))); do
+    local run_id entry_conclusion entry_url entry_updated entry_state stages_i jobs_json entry
+    run_id=$(echo "$run_json" | jq -r ".[$i].databaseId // empty")
+    entry_conclusion=$(echo "$run_json" | jq -r ".[$i].conclusion // empty")
+    entry_url=$(echo "$run_json" | jq -r ".[$i].url // empty")
+    entry_updated=$(echo "$run_json" | jq -r ".[$i].updatedAt // empty")
+
+    case "$entry_conclusion" in
+      success) entry_state="ok" ;;
+      failure|cancelled) entry_state="failed" ;;
+      *) entry_state="running" ;;
+    esac
+
+    stages_i="[]"
     if [ -n "$run_id" ]; then
-      local jobs_json
       jobs_json=$(gh run view "$run_id" --repo "$slug" --json jobs 2>/dev/null)
-      current_step=$(echo "$jobs_json" | jq -r '[.jobs[]?.steps[]? | select(.status == "in_progress")][0].name // empty')
-      running_stages=$(echo "$jobs_json" | jq '
+      stages_i=$(echo "$jobs_json" | jq '
         [.jobs[]? | {
           name: .name,
           status: (
@@ -108,26 +119,25 @@ harbor::fetch_github() {
           )
         }]
       ')
+      if [ "$i" -eq 0 ]; then
+        current_step=$(echo "$jobs_json" | jq -r '[.jobs[]?.steps[]? | select(.status == "in_progress")][0].name // empty')
+      fi
     fi
-  fi
+
+    entry=$(jq -n --arg state "$entry_state" --arg url "$entry_url" --arg created_at "$entry_updated" --argjson stages "$stages_i" \
+      '{state: $state, url: $url, created_at: $created_at, stages: $stages}')
+    entries=$(echo "$entries" | jq --argjson e "$entry" '. + [$e]')
+  done
 
   local history
-  history=$(echo "$run_json" | jq '
-    [.[] | {
-      state: (if .conclusion == "success" then "ok"
-              elif (.conclusion == "failure" or .conclusion == "cancelled") then "failed"
-              else "running" end),
-      url: .url,
-      created_at: .updatedAt
-    }] | reverse
-  ')
+  history=$(echo "$entries" | jq 'reverse')
 
   jq -n \
     --arg name "$name" --arg platform "github" --arg branch "$branch" \
     --arg state "$state" --arg label "$label" --arg url "$url" \
     --arg updated_at "$updated_at" --argjson history "$history" \
-    --arg current_step "$current_step" --argjson running_stages "$running_stages" \
-    '{name: $name, platform: $platform, branch: $branch, state: $state, label: $label, url: $url, updated_at: $updated_at, history: $history, current_step: $current_step, running_stages: $running_stages}'
+    --arg current_step "$current_step" \
+    '{name: $name, platform: $platform, branch: $branch, state: $state, label: $label, url: $url, updated_at: $updated_at, history: $history, current_step: $current_step}'
 }
 
 # harbor::fetch_gitlab <repo_path> <display_name>
@@ -169,21 +179,31 @@ harbor::fetch_gitlab() {
     *) state="running"; label="Running" ;;
   esac
 
-  # Only worth the extra API round-trip while a pipeline is actually running —
-  # GitLab's jobs have a real "stage" concept (validate/test/build/...), so
-  # running_stages groups jobs by stage and aggregates each stage's worst
-  # status, matching the same validate -> test -> build column breakdown
+  # Fetch EACH returned pipeline's own job list, not just the latest — so
+  # the UI's run picker can show real stage-by-stage detail for whichever
+  # run is selected. GitLab's jobs have a real "stage" concept
+  # (validate/test/build/...), so each entry's stages groups jobs by stage
+  # and aggregates each stage's worst status, matching the column breakdown
   # GitLab's own pipeline UI shows. Stage order is preserved by first
   # appearance in the API response (pipeline-definition order), not sorted.
-  local current_step="" running_stages="[]"
-  if [ "$state" = "running" ]; then
-    local pipeline_id
-    pipeline_id=$(echo "$pipeline_json" | jq -r '.[0].id // empty')
+  local current_step="" entries="[]"
+  for i in $(seq 0 $((count - 1))); do
+    local pipeline_id entry_status entry_url entry_updated entry_state stages_i jobs_json entry
+    pipeline_id=$(echo "$pipeline_json" | jq -r ".[$i].id // empty")
+    entry_status=$(echo "$pipeline_json" | jq -r ".[$i].status // empty")
+    entry_url=$(echo "$pipeline_json" | jq -r ".[$i].web_url // empty")
+    entry_updated=$(echo "$pipeline_json" | jq -r ".[$i].updated_at // empty")
+
+    case "$entry_status" in
+      success) entry_state="ok" ;;
+      failed|canceled|skipped) entry_state="failed" ;;
+      *) entry_state="running" ;;
+    esac
+
+    stages_i="[]"
     if [ -n "$pipeline_id" ]; then
-      local jobs_json
       jobs_json=$(glab api "projects/$encoded_path/pipelines/$pipeline_id/jobs" 2>/dev/null)
-      current_step=$(echo "$jobs_json" | jq -r '[.[] | select(.status == "running")][0].stage // empty')
-      running_stages=$(echo "$jobs_json" | jq '
+      stages_i=$(echo "$jobs_json" | jq '
         [.[] | {stage: .stage, status: .status}] as $jobs
         | (reduce $jobs[] as $j ([]; if (. | index($j.stage)) then . else . + [$j.stage] end)) as $ordered
         | [$ordered[] as $s | ($jobs | map(select(.stage == $s))) as $sj | {
@@ -196,24 +216,23 @@ harbor::fetch_gitlab() {
             )
           }]
       ')
+      if [ "$i" -eq 0 ]; then
+        current_step=$(echo "$jobs_json" | jq -r '[.[] | select(.status == "running")][0].stage // empty')
+      fi
     fi
-  fi
+
+    entry=$(jq -n --arg state "$entry_state" --arg url "$entry_url" --arg created_at "$entry_updated" --argjson stages "$stages_i" \
+      '{state: $state, url: $url, created_at: $created_at, stages: $stages}')
+    entries=$(echo "$entries" | jq --argjson e "$entry" '. + [$e]')
+  done
 
   local history
-  history=$(echo "$pipeline_json" | jq '
-    [.[] | {
-      state: (if .status == "success" then "ok"
-              elif (.status == "failed" or .status == "canceled" or .status == "skipped") then "failed"
-              else "running" end),
-      url: .web_url,
-      created_at: .updated_at
-    }] | reverse
-  ')
+  history=$(echo "$entries" | jq 'reverse')
 
   jq -n \
     --arg name "$name" --arg platform "gitlab" --arg branch "$default_branch" \
     --arg state "$state" --arg label "$label" --arg url "$url" \
     --arg updated_at "$updated_at" --argjson history "$history" \
-    --arg current_step "$current_step" --argjson running_stages "$running_stages" \
-    '{name: $name, platform: $platform, branch: $branch, state: $state, label: $label, url: $url, updated_at: $updated_at, history: $history, current_step: $current_step, running_stages: $running_stages}'
+    --arg current_step "$current_step" \
+    '{name: $name, platform: $platform, branch: $branch, state: $state, label: $label, url: $url, updated_at: $updated_at, history: $history, current_step: $current_step}'
 }
