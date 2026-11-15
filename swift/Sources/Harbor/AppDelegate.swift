@@ -20,6 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var timer: Timer?
     private var lastRepoCount = 0
     private var lastRepoNames: [String] = []
+    private var lastRepos: [RepoStatus] = []
     private var isRefreshing = false
     private let statusPath = NSString(string: "~/.harbor/status.json").expandingTildeInPath
     private let configPath = NSString(string: "~/.harbor/config.json").expandingTildeInPath
@@ -44,7 +45,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let headerHeight: CGFloat = 34
     private let footerHeight: CGFloat = 44
     private let maxVisibleCards = 8
-    private let maxContentWidth: CGFloat = 420
+    // Raised from 420: that cap only ever measured repo name width, but the
+    // horizontal stage-column breakdown (validate | test | build | ...,
+    // each with its own jobs) regularly needs much more than that to avoid
+    // the inner horizontal scroll. Still a real cap, not unlimited — a
+    // pathological pipeline with many wide stages still scrolls internally
+    // past this width instead of growing forever.
+    private let maxContentWidth: CGFloat = 900
 
     private func idealContentHeight(repoCount: Int) -> CGFloat {
         let visible = min(max(repoCount, 0), maxVisibleCards)
@@ -55,19 +62,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     /// Widest repo name's rendered width (same font/weight RepoCardView uses
-    /// for the title), plus the card chrome around it, clamped to
-    /// [panel.minSize.width, maxContentWidth]. Past that cap the window stops
-    /// growing and RepoCardView's name Text wraps instead (see its
-    /// .fixedSize(horizontal: false, vertical: true)).
-    private func idealContentWidth(repoNames: [String]) -> CGFloat {
-        let font = NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .semibold)
+    /// for the title), OR the widest stage-column row (whichever is wider),
+    /// plus chrome, clamped to [panel.minSize.width, maxContentWidth]. Past
+    /// that cap the window stops growing — names wrap (.fixedSize) and the
+    /// stage row scrolls internally (ScrollView in StageListView) instead.
+    private func idealContentWidth(repoNames: [String], repos: [RepoStatus]) -> CGFloat {
+        let nameFont = NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .semibold)
         let longestNameWidth = repoNames
-            .map { ($0 as NSString).size(withAttributes: [.font: font]).width }
+            .map { ($0 as NSString).size(withAttributes: [.font: nameFont]).width }
             .max() ?? 0
         // card horizontal padding (10 left + 10 right) + accent bar (4) +
         // spacer/icon on the title row (~28)
-        let chrome: CGFloat = 10 + 10 + 4 + 28
-        return min(max(longestNameWidth + chrome, panel.minSize.width), maxContentWidth)
+        let nameChrome: CGFloat = 10 + 10 + 4 + 28
+
+        // Measures the same default-selected run every card opens to (the
+        // newest/"Latest" entry) — matching RepoCardView's own default
+        // selectedIndex — since that's what's actually visible without the
+        // viewer picking an older run first.
+        let stageFont = NSFont.monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .semibold)
+        let jobFont = NSFont.monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
+        let iconAllowance: CGFloat = 14 // status glyph + its spacing, per column
+        let columnSpacing: CGFloat = 14
+
+        let widestStageRow = repos.compactMap { repo -> CGFloat? in
+            guard let latest = repo.recentHistory.last else { return nil }
+            let stages = latest.stageList
+            guard !stages.isEmpty else { return nil }
+            let columnWidths = stages.map { stage -> CGFloat in
+                let stageWidth = (stage.name as NSString).size(withAttributes: [.font: stageFont]).width
+                let widestJob = stage.jobList
+                    .map { ($0.name as NSString).size(withAttributes: [.font: jobFont]).width }
+                    .max() ?? 0
+                return max(stageWidth, widestJob) + iconAllowance
+            }
+            return columnWidths.reduce(0, +) + columnSpacing * CGFloat(max(columnWidths.count - 1, 0))
+        }.max() ?? 0
+
+        // picker column (84) + its spacing (10) + divider (1) + its spacing
+        // (10), same layout RepoCardView actually uses, plus the shared
+        // name-row chrome above.
+        let stageRowChrome: CGFloat = nameChrome + 84 + 10 + 1 + 10
+
+        let target = max(longestNameWidth + nameChrome, widestStageRow + stageRowChrome)
+        return min(max(target, panel.minSize.width), maxContentWidth)
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -132,6 +169,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         lastRepoCount = repos.count + testflightApps.count
         lastRepoNames = repos.map(\.name) + testflightApps.map(\.name)
+        lastRepos = repos
 
         // SF Symbols have their own multicolor/palette rendering system that
         // bypasses contentTintColor + isTemplate (the classic menu-bar-icon
@@ -204,7 +242,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         var frame = panel.frame
         frame.size.height = idealContentHeight(repoCount: lastRepoCount)
-        frame.size.width = idealContentWidth(repoNames: lastRepoNames)
+        frame.size.width = idealContentWidth(repoNames: lastRepoNames, repos: lastRepos)
         panel.setFrame(frame, display: false)
 
         let buttonScreenRect = buttonWindow.convertToScreen(button.convert(button.bounds, to: nil))
