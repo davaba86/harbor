@@ -20,11 +20,80 @@ extension RunState {
         case .stale: return "questionmark.circle.fill"
         }
     }
+
+    var displayLabel: String {
+        switch self {
+        case .ok: return "OK"
+        case .failed: return "Failed"
+        case .running: return "Running"
+        case .authError: return "Auth"
+        case .stale: return "Stale"
+        }
+    }
 }
 
+extension StageState {
+    var color: Color {
+        switch self {
+        case .ok: return .green
+        case .failed: return .red
+        case .running: return .yellow
+        case .pending: return .secondary
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .ok: return "checkmark.circle.fill"
+        case .failed: return "xmark.circle.fill"
+        case .running: return "circle.dotted"
+        case .pending: return "circle"
+        }
+    }
+}
+
+/// Compact validate -> test -> build -> ... breakdown for a currently-running
+/// pipeline, so "where are we, is it stuck" is answerable without leaving
+/// the menu bar — mirrors the stage columns GitLab's own pipeline page shows.
+struct StageListView: View {
+    let stages: [RunningStage]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            ForEach(stages, id: \.name) { stage in
+                HStack(spacing: 5) {
+                    Image(systemName: stage.status.symbol)
+                        .font(.system(size: 9))
+                        .foregroundStyle(stage.status.color)
+                    Text(stage.name)
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(stage.status == .pending ? .secondary : .primary)
+                }
+            }
+        }
+    }
+}
+
+/// Every repo's standard card: a left-column picker over the last 3 runs
+/// (same history the backend already fetches, no extra API cost) and a
+/// right-side detail pane for whichever run is selected (newest by default).
+/// The live stage breakdown only ever applies to the newest run while it's
+/// actually running — older runs show their basic outcome + a link, since
+/// fetching full job/stage detail for finished runs isn't worth the extra
+/// API calls for data that's no longer actionable. This used to be a
+/// separate drill-in screen behind a tap + Back button; the user wanted it
+/// as the standing default for every card instead, so there's no navigation
+/// here at all — just always-visible detail.
 struct RepoCardView: View {
     let repo: RepoStatus
     let staleThreshold: Int
+    @State private var selectedIndex: Int
+
+    init(repo: RepoStatus, staleThreshold: Int) {
+        self.repo = repo
+        self.staleThreshold = staleThreshold
+        _selectedIndex = State(initialValue: max(repo.recentHistory.count - 1, 0))
+    }
 
     var display: DisplayState { DisplayState.compute(repo: repo, staleThreshold: staleThreshold) }
 
@@ -34,7 +103,7 @@ struct RepoCardView: View {
                 .fill(display.state.color)
                 .frame(width: 4)
 
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 8) {
                 // .top alignment + fixedSize so a name that wraps (past the
                 // panel's width cap, see AppDelegate.idealContentWidth)
                 // grows downward instead of compressing or clipping, with
@@ -49,55 +118,78 @@ struct RepoCardView: View {
                         .foregroundStyle(display.state.color)
                 }
 
-                if !repo.recentHistory.isEmpty {
-                    let dotDiameter: CGFloat = 8
-                    let dotSpacing: CGFloat = 6
-                    let dotStride = dotDiameter + dotSpacing
-                    let dotCount = repo.recentHistory.count
-
-                    // A connecting rail behind the dots, like a real pipeline
-                    // timeline — a continuous line from the first dot's
-                    // center to the last, with colored dots layered on top
-                    // (each dot visually interrupts the line under it, same
-                    // as the reference ShipBoard/CIMon stage graphics).
-                    ZStack(alignment: .leading) {
-                        if dotCount > 1 {
-                            Rectangle()
-                                .fill(Color.secondary.opacity(0.3))
-                                .frame(width: CGFloat(dotCount - 1) * dotStride, height: 1.5)
-                                .offset(x: dotDiameter / 2)
-                        }
-                        HStack(spacing: dotSpacing) {
-                            ForEach(Array(repo.recentHistory.enumerated()), id: \.offset) { _, entry in
-                                Circle()
-                                    .fill(entry.state.color)
-                                    .frame(width: dotDiameter, height: dotDiameter)
+            if repo.recentHistory.isEmpty {
+                Text("No run history yet")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                HStack(alignment: .top, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        ForEach(Array(repo.recentHistory.enumerated()), id: \.offset) { idx, entry in
+                            let isNewest = idx == repo.recentHistory.count - 1
+                            Button(action: { selectedIndex = idx }) {
+                                HStack(spacing: 6) {
+                                    Circle().fill(entry.state.color).frame(width: 7, height: 7)
+                                    Text(isNewest ? "Latest" : "Run \(idx + 1)")
+                                        .font(.system(.caption2, design: .monospaced))
+                                }
+                                .padding(.vertical, 3)
+                                .padding(.horizontal, 6)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(idx == selectedIndex ? Color.secondary.opacity(0.2) : .clear)
+                                .clipShape(RoundedRectangle(cornerRadius: 5))
                             }
+                            .buttonStyle(.plain)
                         }
                     }
-                    .frame(height: dotDiameter)
-                }
+                    .frame(width: 84)
 
-                if let step = repo.runningStep {
-                    Text("Running · \(step)")
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(RunState.running.color)
-                } else {
-                    Text("\(repo.branch) · \(repo.platform) · \(formatAge(display.ageSeconds))")
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                    Divider()
+
+                    if repo.recentHistory.indices.contains(selectedIndex) {
+                        let entry = repo.recentHistory[selectedIndex]
+                        let isNewest = selectedIndex == repo.recentHistory.count - 1
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack(spacing: 5) {
+                                Image(systemName: entry.state.symbol)
+                                    .foregroundStyle(entry.state.color)
+                                Text(entry.state.displayLabel)
+                                    .font(.system(.caption, design: .monospaced))
+                                    .fontWeight(.semibold)
+                            }
+
+                            if isNewest, let step = repo.runningStep {
+                                Text("Running · \(step)")
+                                    .font(.system(.caption2, design: .monospaced))
+                                    .foregroundStyle(RunState.running.color)
+                                if !repo.stages.isEmpty {
+                                    StageListView(stages: repo.stages)
+                                }
+                            } else {
+                                Text(formatAge(DisplayState.ageSeconds(fetchedAt: entry.createdAt)))
+                                    .font(.system(.caption2, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            if !entry.url.isEmpty {
+                                Button("Open in Browser") {
+                                    if let url = URL(string: entry.url) {
+                                        NSWorkspace.shared.open(url)
+                                    }
+                                }
+                                .font(.caption2)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
             }
+            }
             .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(Color(nsColor: .controlBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 10))
-        .contentShape(Rectangle())
-        .onTapGesture {
-            if let url = URL(string: repo.url), !repo.url.isEmpty {
-                NSWorkspace.shared.open(url)
-            }
-        }
     }
 }
 

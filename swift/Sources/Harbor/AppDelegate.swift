@@ -24,11 +24,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let configPath = NSString(string: "~/.harbor/config.json").expandingTildeInPath
 
     // Rough per-row heights for auto-sizing the panel to its content. These
-    // are estimates of RepoCardView's actual layout (name+icon row, dot row,
-    // caption row, padding) — not pixel-exact, but close enough that any
-    // small mismatch just shows as a sliver of extra/short space rather than
-    // clipping anything, since the content is already in a ScrollView.
-    private let cardHeight: CGFloat = 84
+    // are estimates of RepoCardView's actual layout — not pixel-exact, but
+    // close enough that any small mismatch just shows as a sliver of
+    // extra/short space rather than clipping anything, since the content is
+    // already in a ScrollView. Bumped up when the card became the always-on
+    // run-picker + detail layout (title row + 3-row picker/detail split)
+    // instead of the original compact single-line card — height now varies
+    // more between repos (a running card with a stage list is taller than a
+    // finished one, and a no-history repo is much shorter), which this flat
+    // per-card estimate can't capture exactly; same ScrollView safety net.
+    private let cardHeight: CGFloat = 130
     private let cardSpacing: CGFloat = 8
     private let headerHeight: CGFloat = 34
     private let footerHeight: CGFloat = 44

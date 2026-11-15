@@ -5,7 +5,7 @@ final class StatusModelTests: XCTestCase {
     func makeRepo(state: RunState, fetchedAt: String) -> RepoStatus {
         RepoStatus(name: "test-repo", platform: "gitlab", branch: "main",
                    state: state, label: "x", url: "", updatedAt: "", fetchedAt: fetchedAt,
-                   history: [], currentStep: nil)
+                   history: [], currentStep: nil, runningStages: nil)
     }
 
     func testFreshOkStateIsNotStale() {
@@ -84,7 +84,7 @@ final class StatusModelTests: XCTestCase {
 
         let runningWithStep = RepoStatus(name: "x", platform: "gitlab", branch: "main", state: .running,
                                           label: "Running", url: "", updatedAt: "", fetchedAt: "",
-                                          history: [], currentStep: "test")
+                                          history: [], currentStep: "test", runningStages: nil)
         XCTAssertEqual(runningWithStep.runningStep, "test")
 
         // common.sh never actually produces this combination (current_step is
@@ -93,8 +93,25 @@ final class StatusModelTests: XCTestCase {
         // genuinely "running", as a defensive guard against future backend bugs.
         let okWithUnexpectedStep = RepoStatus(name: "x", platform: "gitlab", branch: "main", state: .ok,
                                                label: "OK", url: "", updatedAt: "", fetchedAt: "",
-                                               history: [], currentStep: "test")
+                                               history: [], currentStep: "test", runningStages: nil)
         XCTAssertNil(okWithUnexpectedStep.runningStep)
+    }
+
+    func testStagesOnlyShownWhenActuallyRunning() {
+        let stages = [RunningStage(name: "validate", status: .ok), RunningStage(name: "test", status: .running)]
+
+        let running = RepoStatus(name: "x", platform: "gitlab", branch: "main", state: .running,
+                                  label: "Running", url: "", updatedAt: "", fetchedAt: "",
+                                  history: [], currentStep: "test", runningStages: stages)
+        XCTAssertEqual(running.stages, stages)
+
+        // Same defensive guard as runningStep: a stale running_stages value
+        // left over once the pipeline has actually finished must not leak
+        // through once state has moved on.
+        let finished = RepoStatus(name: "x", platform: "gitlab", branch: "main", state: .ok,
+                                   label: "OK", url: "", updatedAt: "", fetchedAt: "",
+                                   history: [], currentStep: nil, runningStages: stages)
+        XCTAssertEqual(finished.stages, [])
     }
 
     func makeTestFlight(processing: ProcessingState, review: BetaReviewStatus?) -> TestFlightStatus {

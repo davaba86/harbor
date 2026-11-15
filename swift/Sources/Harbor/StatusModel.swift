@@ -17,6 +17,21 @@ struct HistoryEntry: Codable, Equatable {
     }
 }
 
+/// A stage/job's status while a run is in progress — distinct from RunState
+/// because "pending/queued" is a real, meaningful state here (the stage
+/// hasn't started yet) that RunState has no equivalent for, and baking it
+/// into RunState would pollute that enum's other uses (tray icon, worst-state).
+enum StageState: String, Codable {
+    case pending, running, ok, failed
+}
+
+/// One stage (GitLab: validate/test/build/...) or job (GitHub, which has no
+/// stage concept — each job is its own row) in a currently-running pipeline.
+struct RunningStage: Codable, Equatable {
+    let name: String
+    let status: StageState
+}
+
 struct RepoStatus: Codable, Identifiable {
     var id: String { name }
     let name: String
@@ -37,6 +52,8 @@ struct RepoStatus: Codable, Identifiable {
     // run is actually "running" (it's not worth the extra API call
     // otherwise), and poll.sh's fallback entries never set it at all.
     let currentStep: String?
+    // Same optional-from-the-start reasoning as history/currentStep.
+    let runningStages: [RunningStage]?
 
     enum CodingKeys: String, CodingKey {
         case name, platform, branch, state, label, url
@@ -44,12 +61,17 @@ struct RepoStatus: Codable, Identifiable {
         case fetchedAt = "fetched_at"
         case history
         case currentStep = "current_step"
+        case runningStages = "running_stages"
     }
 
     var recentHistory: [HistoryEntry] { history ?? [] }
     var runningStep: String? {
         guard state == .running, let currentStep, !currentStep.isEmpty else { return nil }
         return currentStep
+    }
+    var stages: [RunningStage] {
+        guard state == .running else { return [] }
+        return runningStages ?? []
     }
 }
 
