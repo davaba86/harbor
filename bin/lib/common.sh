@@ -203,8 +203,12 @@ harbor::fetch_gitlab() {
     stages_i="[]"
     if [ -n "$pipeline_id" ]; then
       jobs_json=$(glab api "projects/$encoded_path/pipelines/$pipeline_id/jobs" 2>/dev/null)
+      # Keep each stage's individual jobs nested underneath it (not just the
+      # stage's aggregate status) — matches GitLab's own pipeline UI, which
+      # shows every job inside each stage column, not just a pass/fail per
+      # stage. No extra API cost: same jobs_json already fetched above.
       stages_i=$(echo "$jobs_json" | jq '
-        [.[] | {stage: .stage, status: .status}] as $jobs
+        [.[] | {stage: .stage, status: .status, name: .name}] as $jobs
         | (reduce $jobs[] as $j ([]; if (. | index($j.stage)) then . else . + [$j.stage] end)) as $ordered
         | [$ordered[] as $s | ($jobs | map(select(.stage == $s))) as $sj | {
             name: $s,
@@ -213,7 +217,16 @@ harbor::fetch_gitlab() {
               elif ($sj | any(.status == "running")) then "running"
               elif ($sj | all(.status == "success" or .status == "skipped")) then "ok"
               else "pending" end
-            )
+            ),
+            jobs: [$sj[] | {
+              name: .name,
+              status: (
+                if .status == "success" then "ok"
+                elif (.status == "failed" or .status == "canceled") then "failed"
+                elif .status == "running" then "running"
+                else "pending" end
+              )
+            }]
           }]
       ')
       if [ "$i" -eq 0 ]; then

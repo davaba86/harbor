@@ -52,22 +52,44 @@ extension StageState {
     }
 }
 
-/// Compact validate -> test -> build -> ... breakdown for a currently-running
-/// pipeline, so "where are we, is it stuck" is answerable without leaving
-/// the menu bar — mirrors the stage columns GitLab's own pipeline page shows.
+/// validate -> test -> build -> ... breakdown for one run, mirroring the
+/// stage COLUMNS GitLab's own pipeline page shows left-to-right (not a
+/// top-down list) — each stage's individual jobs stacked vertically within
+/// its own column, so "where are we, is it stuck" reads the same way
+/// GitLab's own UI does. Wrapped in its own horizontal ScrollView so a
+/// pipeline with many stages scrolls within this block instead of forcing
+/// the whole card (and panel) wider — same behavior GitLab's own page has
+/// when stages overflow. GitHub jobs have no stage to group under (one
+/// column per job, jobList empty), so they render as a row of single-job
+/// columns instead of stage columns — same shape, no stage grouping.
 struct StageListView: View {
     let stages: [RunningStage]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            ForEach(stages, id: \.name) { stage in
-                HStack(spacing: 5) {
-                    Image(systemName: stage.status.symbol)
-                        .font(.system(size: 9))
-                        .foregroundStyle(stage.status.color)
-                    Text(stage.name)
-                        .font(.system(.caption2, design: .monospaced))
-                        .foregroundStyle(stage.status == .pending ? .secondary : .primary)
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(alignment: .top, spacing: 14) {
+                ForEach(stages, id: \.name) { stage in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 5) {
+                            Image(systemName: stage.status.symbol)
+                                .font(.system(size: 9))
+                                .foregroundStyle(stage.status.color)
+                            Text(stage.name)
+                                .font(.system(.caption2, design: .monospaced))
+                                .fontWeight(.semibold)
+                                .foregroundStyle(stage.status == .pending ? .secondary : .primary)
+                        }
+                        ForEach(stage.jobList, id: \.name) { job in
+                            HStack(spacing: 5) {
+                                Image(systemName: job.status.symbol)
+                                    .font(.system(size: 8))
+                                    .foregroundStyle(job.status.color)
+                                Text(job.name)
+                                    .font(.system(.caption2, design: .monospaced))
+                                    .foregroundStyle(job.status == .pending ? .secondary : .primary)
+                            }
+                        }
+                    }
                 }
             }
         }

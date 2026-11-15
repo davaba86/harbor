@@ -14,11 +14,26 @@ enum StageState: String, Codable {
     case pending, running, ok, failed
 }
 
+/// One job within a GitLab stage. GitHub has no stage concept, so its jobs
+/// are modeled directly as top-level RunningStage entries with no jobs of
+/// their own (jobs stays nil/empty there).
+struct StageJob: Codable, Equatable {
+    let name: String
+    let status: StageState
+}
+
 /// One stage (GitLab: validate/test/build/...) or job (GitHub, which has no
-/// stage concept — each job is its own row) within a single run.
+/// stage concept — each job is its own row) within a single run. For
+/// GitLab, `jobs` holds every individual job inside that stage (not just
+/// the stage's aggregate status) — matches GitLab's own pipeline UI, which
+/// shows each job in its stage's column, e.g. "validate" containing
+/// validate-ios-key / validate-runner-count / validate-supabase-auth.
 struct RunningStage: Codable, Equatable {
     let name: String
     let status: StageState
+    let jobs: [StageJob]?
+
+    var jobList: [StageJob] { jobs ?? [] }
 }
 
 struct HistoryEntry: Codable, Equatable {
@@ -174,8 +189,20 @@ struct DisplayState {
         return f
     }()
 
+    // GitLab's timestamps include fractional seconds ("...40.679Z"), which
+    // the plain formatter above can't parse at all — it silently returns
+    // nil, which fed straight into the 999_999 fallback below and displayed
+    // as a bogus "277h ago" for data that was actually fresh. GitHub's
+    // timestamps have no fraction, so both formatters stay in play.
+    static let isoFormatterWithFractionalSeconds: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
     static func ageSeconds(fetchedAt: String, now: Date = Date()) -> Int {
-        guard !fetchedAt.isEmpty, let date = isoFormatter.date(from: fetchedAt) else {
+        guard !fetchedAt.isEmpty else { return 999_999 }
+        guard let date = isoFormatter.date(from: fetchedAt) ?? isoFormatterWithFractionalSeconds.date(from: fetchedAt) else {
             return 999_999
         }
         return max(0, Int(now.timeIntervalSince(date)))

@@ -31,6 +31,25 @@ final class StatusModelTests: XCTestCase {
         XCTAssertEqual(display.state, .stale)
     }
 
+    /// Regression test: GitLab's timestamps include fractional seconds
+    /// ("...40.679Z"), which the plain ISO8601 formatter can't parse at all —
+    /// it silently returned nil and fell into the 999_999 sentinel, which
+    /// then displayed as a bogus "277h ago" for data that was actually
+    /// fresh (seen for real in the run picker's "Open in Browser" detail).
+    func testAgeSecondsParsesFractionalSecondTimestamps() {
+        let now = Date()
+        let tenMinutesAgo = now.addingTimeInterval(-600)
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let fetchedAt = f.string(from: tenMinutesAgo)
+
+        let age = DisplayState.ageSeconds(fetchedAt: fetchedAt, now: now)
+        // Within 1s to absorb sub-second truncation in the format/parse
+        // round-trip — the actual regression this guards against is a
+        // 999_999 sentinel, off by orders of magnitude, not a rounding blip.
+        XCTAssertLessThan(abs(age - 600), 2, "a fractional-second timestamp must parse to its real age, not fall back to the 999_999 stale sentinel")
+    }
+
     func testWorstStatePriorityFailedBeatsEverything() {
         XCTAssertEqual(WorstState.compute([.ok, .running, .failed, .stale]), .failed)
     }
@@ -112,7 +131,7 @@ final class StatusModelTests: XCTestCase {
     }
 
     func testHistoryEntryStagesPresent() {
-        let stages = [RunningStage(name: "validate", status: .ok), RunningStage(name: "test", status: .running)]
+        let stages = [RunningStage(name: "validate", status: .ok, jobs: nil), RunningStage(name: "test", status: .running, jobs: nil)]
         let entry = HistoryEntry(state: .running, url: "", createdAt: "", stages: stages)
         XCTAssertEqual(entry.stageList, stages)
     }

@@ -12,6 +12,11 @@
   </array>
   <key>StartInterval</key>
   <integer>__INTERVAL_SECONDS__</integer>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
   <key>StandardOutPath</key>
   <string>__HARBOR_DIR__/launchd.log</string>
   <key>StandardErrorPath</key>
