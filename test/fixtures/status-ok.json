@@ -1,0 +1,1 @@
+{"generated_at": "2026-11-15T10:00:00Z", "repos": [{"name": "example-repo", "platform": "gitlab", "branch": "main", "state": "ok", "label": "OK", "url": "https://gitlab.com/example-group/example-repo/-/pipelines/1", "updated_at": "2026-11-15T09:59:00Z", "fetched_at": "2026-11-15T10:00:00Z"}]}

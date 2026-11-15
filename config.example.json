@@ -1,0 +1,6 @@
+{
+  "interval_seconds": 60,
+  "repos": [
+    { "name": "example-repo", "path": "/Users/you/git-repos/example-repo" }
+  ]
+}
