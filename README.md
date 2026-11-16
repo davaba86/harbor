@@ -15,6 +15,31 @@ This creates `~/.harbor/config.json` from the template (edit it to add repos,
 or see "Dotfiles-managed config" below), builds and installs the native menu
 bar app, and loads the `launchd` polling job.
 
+## Authentication
+
+Harbor never stores or manages credentials itself. Every fetch goes through
+the `gh`/`glab` CLI directly (`gh run list`, `glab api ...`), and both
+resolve auth from their own stored login — Harbor never reads or passes a
+token of its own:
+
+```bash
+gh auth login
+glab auth login
+```
+
+If a repo shows `⚠ Auth`, that platform's CLI login has expired or lost
+access to that repo — re-run the matching command above. There's nothing to
+fix on Harbor's side; it only detects the failure (by matching `401`/`403`
+in the CLI's own error output), it doesn't cause or resolve it.
+
+**`launchd` PATH note:** the poller runs under `launchd`, which gives jobs a
+bare `PATH` (`/usr/bin:/bin:/usr/sbin:/sbin`) with no Homebrew — so both
+`install/*.plist.template` files pin `PATH` to include
+`/opt/homebrew/bin:/usr/local/bin` so `gh`/`glab`/`jq` are actually found. If
+yours live somewhere else (a different package manager, a custom prefix),
+every repo will silently show stale/no-op refreshes until you add that path
+to the `PATH` entry in both templates, then re-run `install.sh`.
+
 ## Config
 
 `~/.harbor/config.json`:
