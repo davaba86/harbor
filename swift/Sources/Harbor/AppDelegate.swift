@@ -82,7 +82,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // viewer picking an older run first.
         let stageFont = NSFont.monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .semibold)
         let jobFont = NSFont.monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
-        let iconAllowance: CGFloat = 14 // status glyph + its spacing, per column
+        let iconAllowance: CGFloat = 14 + 12 // status glyph + its spacing, plus the stage box's own 6pt padding on each side
         // HStack spacing (6) on each side of the arrow connector (~10 at
         // this size) between columns, matching StageListView's actual layout.
         let columnSpacing: CGFloat = 6 + 10 + 6

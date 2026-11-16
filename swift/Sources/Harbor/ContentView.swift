@@ -69,6 +69,12 @@ struct StageListView: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(alignment: .top, spacing: 6) {
                 ForEach(Array(stages.enumerated()), id: \.element.name) { index, stage in
+                    // Boxing each stage's jobs together (not just stacking
+                    // them under a header) is what actually makes "these
+                    // belong together" unambiguous — a connector alone
+                    // between headers left the job rows underneath reading
+                    // as loose, ungrouped lines. Matches the reference
+                    // bordered-card-per-stage layout.
                     VStack(alignment: .leading, spacing: 4) {
                         HStack(spacing: 5) {
                             Image(systemName: stage.status.symbol)
@@ -90,16 +96,20 @@ struct StageListView: View {
                             }
                         }
                     }
+                    .padding(6)
+                    .background(Color.secondary.opacity(0.1))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
 
-                    // Arrow connecting this stage to the next, so the
-                    // validate -> test -> build -> ... order reads as a
-                    // flow rather than loose columns — aligned to sit
-                    // roughly at the header row's vertical center.
+                    // Arrow connecting this stage's box to the next, so the
+                    // validate -> test -> build -> ... order still reads as
+                    // a flow between the boxes — aligned to roughly the
+                    // header row's vertical center, accounting for the
+                    // box's own top padding now.
                     if index < stages.count - 1 {
                         Image(systemName: "arrow.right")
                             .font(.system(size: 9, weight: .medium))
                             .foregroundStyle(.secondary)
-                            .padding(.top, 2)
+                            .padding(.top, 8)
                     }
                 }
             }
