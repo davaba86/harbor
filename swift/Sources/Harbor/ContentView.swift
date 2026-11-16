@@ -52,6 +52,25 @@ extension StageState {
     }
 }
 
+/// A solid-color icon tile for a repo/app's primary status, like System
+/// Settings' blue Wi-Fi badge — a filled square with a white glyph, not a
+/// bare colored SF Symbol floating on its own. Reserved for the one
+/// "primary identity" indicator per card; utility icons (refresh, open in
+/// browser, individual stage/job checks) stay plain glyphs, same as how
+/// Settings only badges Wi-Fi itself, not its lock/details controls.
+struct StatusBadge: View {
+    let state: RunState
+
+    var body: some View {
+        Image(systemName: state.symbol)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(width: 20, height: 20)
+            .background(state.color.gradient)
+            .clipShape(RoundedRectangle(cornerRadius: 5.5))
+    }
+}
+
 /// validate -> test -> build -> ... breakdown for one run, mirroring the
 /// stage COLUMNS GitLab's own pipeline page shows left-to-right (not a
 /// top-down list) — each stage's individual jobs stacked vertically within
@@ -96,9 +115,9 @@ struct StageListView: View {
                             }
                         }
                     }
-                    .padding(6)
+                    .padding(7)
                     .background(Color.secondary.opacity(0.1))
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
 
                     // Arrow connecting this stage's box to the next, so the
                     // validate -> test -> build -> ... order still reads as
@@ -162,7 +181,7 @@ struct RepoCardView: View {
     var titleRow: some View {
         HStack(alignment: .top) {
             Text(repo.name)
-                .font(.system(.body, design: .monospaced))
+                .font(.system(.body))
                 .fontWeight(.semibold)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer()
@@ -191,8 +210,7 @@ struct RepoCardView: View {
                 .buttonStyle(.plain)
                 .help("Open selected run in browser")
             }
-            Image(systemName: display.state.symbol)
-                .foregroundStyle(display.state.color)
+            StatusBadge(state: display.state)
         }
     }
 
@@ -206,18 +224,18 @@ struct RepoCardView: View {
 
             if isCollapsed {
                 titleRow
-                    .padding(10)
+                    .padding(12)
             } else {
                 expandedBody
             }
         }
         .background(Color(nsColor: .controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
     @ViewBuilder
     var expandedBody: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             // .top alignment + fixedSize so a name that wraps (past the
             // panel's width cap, see AppDelegate.idealContentWidth)
             // grows downward instead of compressing or clipping, with
@@ -237,13 +255,13 @@ struct RepoCardView: View {
                                 HStack(spacing: 6) {
                                     Circle().fill(entry.state.color).frame(width: 7, height: 7)
                                     Text(isNewest ? "Latest" : "Run \(idx + 1)")
-                                        .font(.system(.caption2, design: .monospaced))
+                                        .font(.caption2)
                                 }
                                 .padding(.vertical, 3)
                                 .padding(.horizontal, 6)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .background(idx == selectedIndex ? Color.secondary.opacity(0.2) : .clear)
-                                .clipShape(RoundedRectangle(cornerRadius: 5))
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
                             }
                             .buttonStyle(.plain)
                         }
@@ -260,23 +278,30 @@ struct RepoCardView: View {
                                 Image(systemName: entry.state.symbol)
                                     .foregroundStyle(entry.state.color)
                                 Text(entry.state.displayLabel)
-                                    .font(.system(.caption, design: .monospaced))
+                                    .font(.caption)
                                     .fontWeight(.semibold)
                             }
 
                             if let runId = entry.runId, !runId.isEmpty {
+                                // Monospaced deliberately kept here (and for
+                                // job/stage names below): these are genuine
+                                // code identifiers, not UI prose — same
+                                // treatment GitLab's own UI gives job names.
                                 Text("\(repo.platform == "github" ? "Run" : "Pipeline") #\(runId)")
                                     .font(.system(.caption2, design: .monospaced))
                                     .foregroundStyle(.secondary)
                             }
 
                             if isNewest, let step = repo.runningStep {
-                                Text("Running · \(step)")
+                                Text("Running · ")
+                                    .font(.caption2)
+                                    .foregroundColor(RunState.running.color)
+                                + Text(step)
                                     .font(.system(.caption2, design: .monospaced))
-                                    .foregroundStyle(RunState.running.color)
+                                    .foregroundColor(RunState.running.color)
                             } else {
                                 Text(formatAge(DisplayState.ageSeconds(fetchedAt: entry.createdAt)))
-                                    .font(.system(.caption2, design: .monospaced))
+                                    .font(.caption2)
                                     .foregroundStyle(.secondary)
                             }
 
@@ -297,7 +322,7 @@ struct RepoCardView: View {
                 }
             }
             }
-            .padding(10)
+            .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
@@ -322,22 +347,21 @@ struct TestFlightCardView: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                     Text(app.name)
-                        .font(.system(.body, design: .monospaced))
+                        .font(.body)
                         .fontWeight(.semibold)
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer()
-                    Image(systemName: display.state.symbol)
-                        .foregroundStyle(display.state.color)
+                    StatusBadge(state: display.state)
                 }
 
                 Text("\(app.label) · \(formatAge(display.ageSeconds))")
-                    .font(.system(.caption, design: .monospaced))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            .padding(10)
+            .padding(12)
         }
         .background(Color(nsColor: .controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
         .contentShape(Rectangle())
         .onTapGesture {
             if let url = URL(string: app.url), !app.url.isEmpty {
@@ -391,18 +415,18 @@ struct ContentView: View {
             // currently broken/running) doesn't need scrolling past every
             // healthy card first.
             HStack(spacing: 8) {
-                HStack(spacing: 4) {
+                HStack(spacing: 5) {
                     Image(systemName: "magnifyingglass")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                     TextField("Search", text: $searchText)
                         .textFieldStyle(.plain)
-                        .font(.caption)
+                        .font(.callout)
                 }
-                .padding(.horizontal, 6)
-                .padding(.vertical, 4)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
                 .background(Color.secondary.opacity(0.1))
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .clipShape(Capsule())
 
                 Toggle(isOn: $errorsOnly) {
                     Text("Errors only")
@@ -418,7 +442,7 @@ struct ContentView: View {
                 let visibleTestflightApps = status.testflightApps.filter { matches($0.name) }
 
                 ScrollView {
-                    VStack(spacing: 8) {
+                    VStack(spacing: 10) {
                         ForEach(visibleRepos) { repo in
                             RepoCardView(repo: repo, staleThreshold: staleThreshold,
                                          isRefreshing: refreshingRepoNames.contains(repo.name),
@@ -428,17 +452,18 @@ struct ContentView: View {
 
                         // A clear section break, not just a spacing gap —
                         // TestFlight builds aren't a git-based pipeline, so
-                        // they get their own labeled divider instead of
-                        // blending into the repo list above.
+                        // they get their own section label instead of
+                        // blending into the repo list above. Plain bold
+                        // label (no flanking lines) matches how macOS
+                        // Settings labels a group ("Known Networks"), not a
+                        // terminal-style divider.
                         if !visibleTestflightApps.isEmpty {
-                            HStack(spacing: 8) {
-                                Rectangle().fill(.secondary.opacity(0.25)).frame(height: 1)
-                                Text("TESTFLIGHT")
-                                    .font(.system(.caption2, design: .monospaced))
-                                    .foregroundStyle(.secondary)
-                                Rectangle().fill(.secondary.opacity(0.25)).frame(height: 1)
-                            }
-                            .padding(.top, 4)
+                            Text("TestFlight")
+                                .font(.callout)
+                                .fontWeight(.semibold)
+                                .foregroundStyle(.secondary)
+                                .padding(.top, 6)
+                                .padding(.leading, 2)
 
                             ForEach(visibleTestflightApps) { app in
                                 TestFlightCardView(app: app, staleThreshold: staleThreshold)
