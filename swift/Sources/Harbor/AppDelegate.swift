@@ -21,6 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var lastRepoCount = 0
     private var lastRepoNames: [String] = []
     private var lastRepos: [RepoStatus] = []
+    private var lastTestflightApps: [TestFlightStatus] = []
     private var isRefreshing = false
     private var refreshingRepoNames: Set<String> = []
     private let statusPath = NSString(string: "~/.harbor/status.json").expandingTildeInPath
@@ -32,20 +33,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let repoDir = ProcessInfo.processInfo.environment["HARBOR_REPO_DIR"]
 
     // Rough per-row heights for auto-sizing the panel to its content. These
-    // are estimates of RepoCardView's actual layout — not pixel-exact, but
-    // close enough that any small mismatch just shows as a sliver of
+    // are estimates of each card view's actual layout — not pixel-exact,
+    // but close enough that any small mismatch just shows as a sliver of
     // extra/short space rather than clipping anything, since the content is
-    // already in a ScrollView. Bumped up when the card became the always-on
-    // run-picker + detail layout (title row + 3-row picker/detail split)
-    // instead of the original compact single-line card — height now varies
-    // more between repos (a running card with a stage list is taller than a
-    // finished one, and a no-history repo is much shorter), which this flat
-    // per-card estimate can't capture exactly; same ScrollView safety net.
+    // already in a ScrollView. Separate heights per card "shape" (expanded
+    // repo card with the run picker + detail pane, collapsed single-line
+    // card, TestFlight card) because mixing them under one flat per-card
+    // number is exactly what made the panel oversized whenever "errors
+    // only" or a search filter collapsed/hid most of the list — the old
+    // estimate always assumed every visible row was a full expanded repo
+    // card. Driven by real counts from ContentView now, not a guess.
     private let cardHeight: CGFloat = 130
+    private let collapsedCardHeight: CGFloat = 44
+    private let testflightCardHeight: CGFloat = 60
+    private let testflightLabelHeight: CGFloat = 28
     private let cardSpacing: CGFloat = 8
-    private let headerHeight: CGFloat = 34
+    private let headerHeight: CGFloat = 70
     private let footerHeight: CGFloat = 44
-    private let maxVisibleCards = 8
+    // Past this the panel stops growing and the ScrollView takes over
+    // internally instead of pushing the panel off-screen for a long
+    // visible list.
+    private let maxContentHeight: CGFloat = 760
     // Raised from 420: that cap only ever measured repo name width, but the
     // horizontal stage-column breakdown (validate | test | build | ...,
     // each with its own jobs) regularly needs much more than that to avoid
@@ -54,12 +62,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     // past this width instead of growing forever.
     private let maxContentWidth: CGFloat = 900
 
-    private func idealContentHeight(repoCount: Int) -> CGFloat {
-        let visible = min(max(repoCount, 0), maxVisibleCards)
-        let cardsHeight = visible > 0
-            ? CGFloat(visible) * cardHeight + CGFloat(visible - 1) * cardSpacing
-            : 0
-        return max(headerHeight + cardsHeight + footerHeight, panel.minSize.height)
+    /// Real target panel height for the given visible/collapsed counts —
+    /// see the constants above for why this replaced a flat per-card guess.
+    private func targetContentHeight(expandedCount: Int, collapsedCount: Int, testflightCount: Int) -> CGFloat {
+        let totalCards = expandedCount + collapsedCount + testflightCount
+        guard totalCards > 0 else {
+            return max(headerHeight + footerHeight, panel.minSize.height)
+        }
+        let cardsHeight = CGFloat(expandedCount) * cardHeight
+            + CGFloat(collapsedCount) * collapsedCardHeight
+            + CGFloat(testflightCount) * testflightCardHeight
+            + (testflightCount > 0 ? testflightLabelHeight : 0)
+        let spacingHeight = CGFloat(max(totalCards - 1, 0)) * cardSpacing
+        let uncapped = headerHeight + cardsHeight + spacingHeight + footerHeight
+        return max(min(uncapped, maxContentHeight), panel.minSize.height)
+    }
+
+    /// Repos (post stale-threshold compute, not post-filter — used only for
+    /// the very first open, where ContentView hasn't reported real
+    /// post-search/toggle counts yet) split into "would show expanded" vs
+    /// "would collapse" under the default errorsOnly=true, no-search state
+    /// ContentView actually opens with.
+    private func defaultCounts(repos: [RepoStatus], threshold: Int) -> (expanded: Int, collapsed: Int) {
+        var expanded = 0, collapsed = 0
+        for repo in repos {
+            if DisplayState.compute(repo: repo, staleThreshold: threshold).state == .ok {
+                collapsed += 1
+            } else {
+                expanded += 1
+            }
+        }
+        return (expanded, collapsed)
     }
 
     /// Widest repo name's rendered width (same font/weight RepoCardView uses
@@ -141,7 +174,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                                    onRevealConfig: { [weak self] in self?.revealConfig() },
                                    onRefreshAll: { [weak self] in self?.refreshAllNow() },
                                    onRefreshRepo: { [weak self] name in self?.refreshRepoNow(name) },
-                                   onContentSizeMightHaveChanged: { [weak self] in self?.shrinkToFitIfNeeded() })
+                                   onContentSizeMightHaveChanged: { [weak self] expanded, collapsed, tf in
+                                       self?.adjustHeight(expandedCount: expanded, collapsedCount: collapsed, testflightCount: tf)
+                                   })
         )
         panel.contentViewController = hostingController
 
@@ -177,6 +212,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         lastRepoCount = repos.count + testflightApps.count
         lastRepoNames = repos.map(\.name) + testflightApps.map(\.name)
         lastRepos = repos
+        lastTestflightApps = testflightApps
 
         // SF Symbols have their own multicolor/palette rendering system that
         // bypasses contentTintColor + isTemplate (the classic menu-bar-icon
@@ -204,28 +240,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                                                   onRevealConfig: { [weak self] in self?.revealConfig() },
                                                   onRefreshAll: { [weak self] in self?.refreshAllNow() },
                                                   onRefreshRepo: { [weak self] name in self?.refreshRepoNow(name) },
-                                                  onContentSizeMightHaveChanged: { [weak self] in self?.shrinkToFitIfNeeded() })
+                                                  onContentSizeMightHaveChanged: { [weak self] expanded, collapsed, tf in
+                                                      self?.adjustHeight(expandedCount: expanded, collapsedCount: collapsed, testflightCount: tf)
+                                                  })
     }
 
-    /// Measures the view's real fitting height at its current width and
-    /// shrinks the panel down to match if there's slack — e.g. the "errors
-    /// only" toggle collapsing most cards leaves a lot of dead space below
-    /// the content, since idealContentHeight's per-card estimate above was
-    /// computed for the full expanded list at open-time and has no idea the
-    /// toggle exists. Only ever shrinks (never grows past what the panel
-    /// was already opened at) and keeps the TOP edge fixed — the bottom
-    /// edge moves up, matching how the user described wanting this to feel.
-    /// Not hooked into the periodic 5s refresh timer, deliberately: that
+    /// Resizes the panel to the REAL height its visible content needs,
+    /// given the actual post-filter/post-collapse counts ContentView just
+    /// reported — e.g. the "errors only" toggle collapsing most cards, or a
+    /// search filter hiding most of the list. Grows or shrinks as needed
+    /// (not shrink-only) since the counts are now accurate rather than a
+    /// rough estimate, and keeps the TOP edge fixed — the bottom edge
+    /// moves, matching how the user described wanting this to feel. Not
+    /// hooked into the periodic 5s refresh timer, deliberately: that
     /// decoupling is what fixed the original grow-then-shrink flicker bug,
-    /// and this path is opt-in (only fired by deliberate toggle/search
+    /// and this path is opt-in (only fired by deliberate toggle/search/open
     /// interaction in ContentView), not automatic background refresh.
-    private func shrinkToFitIfNeeded() {
+    private func adjustHeight(expandedCount: Int, collapsedCount: Int, testflightCount: Int) {
         guard panel.isVisible else { return }
-        let fitting = hostingController.sizeThatFits(
-            in: NSSize(width: panel.frame.width, height: .greatestFiniteMagnitude)
-        )
-        let targetHeight = max(fitting.height, panel.minSize.height)
-        guard targetHeight < panel.frame.height - 4 else { return } // small tolerance against layout jitter
+        let targetHeight = targetContentHeight(expandedCount: expandedCount, collapsedCount: collapsedCount, testflightCount: testflightCount)
+        guard abs(targetHeight - panel.frame.height) > 1 else { return }
 
         var frame = panel.frame
         let delta = frame.height - targetHeight
@@ -304,8 +338,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         refresh()
 
+        // ContentView opens with errorsOnly=true and no search filter, so
+        // compute the SAME split up front instead of assuming every card is
+        // expanded — that stale assumption was the original source of the
+        // oversized-on-open panel. (ContentView also reports its own real
+        // counts via onAppear right after, which will just confirm this
+        // same number since the assumption matches its actual default.)
+        let threshold = staleThreshold()
+        let (expanded, collapsed) = defaultCounts(repos: lastRepos, threshold: threshold)
+
         var frame = panel.frame
-        frame.size.height = idealContentHeight(repoCount: lastRepoCount)
+        frame.size.height = targetContentHeight(expandedCount: expanded, collapsedCount: collapsed, testflightCount: lastTestflightApps.count)
         frame.size.width = idealContentWidth(repoNames: lastRepoNames, repos: lastRepos)
         panel.setFrame(frame, display: false)
 
@@ -317,19 +360,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         )
         panel.setFrameOrigin(origin)
         panel.makeKeyAndOrderFront(nil)
-
-        // idealContentHeight above assumes every card is fully expanded —
-        // with "errors only" now defaulting to true, the panel opens with
-        // most cards collapsed, so that estimate is oversized from the very
-        // first click, not just after a later toggle. Immediately correct
-        // it down to the real fitting height (same shrink-from-bottom,
-        // top-stays-put logic the toggle/search path already uses).
-        // Deferred one tick: measuring synchronously here can run before
-        // SwiftUI finishes laying out the content for the frame we just
-        // set, giving back a stale/too-large size.
-        DispatchQueue.main.async { [weak self] in
-            self?.shrinkToFitIfNeeded()
-        }
     }
 
     func windowDidResignKey(_ notification: Notification) {

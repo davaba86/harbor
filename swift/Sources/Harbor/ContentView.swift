@@ -380,7 +380,14 @@ struct ContentView: View {
     let onRevealConfig: () -> Void
     let onRefreshAll: () -> Void
     let onRefreshRepo: (String) -> Void
-    let onContentSizeMightHaveChanged: () -> Void
+    // Real post-filter/post-collapse counts, so AppDelegate can size the
+    // panel arithmetically instead of asking SwiftUI's sizeThatFits for a
+    // "natural" height through a ScrollView — a ScrollView always reports
+    // back whatever height it's offered (that's what makes it scroll), so
+    // it can never answer "how tall is my content" no matter what frame
+    // modifiers wrap it. Counting visible/collapsed cards sidesteps that
+    // entirely.
+    let onContentSizeMightHaveChanged: (_ expandedCount: Int, _ collapsedCount: Int, _ testflightCount: Int) -> Void
     @State private var searchText = ""
     @State private var errorsOnly = true
 
@@ -389,6 +396,11 @@ struct ContentView: View {
     }
 
     var body: some View {
+        let visibleRepos = (status?.repos ?? []).filter { matches($0.name) }
+        let visibleTestflightApps = (status?.testflightApps ?? []).filter { matches($0.name) }
+        let collapsedCount = visibleRepos.filter { errorsOnly && DisplayState.compute(repo: $0, staleThreshold: staleThreshold).state == .ok }.count
+        let expandedCount = visibleRepos.count - collapsedCount
+
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("HARBOR")
@@ -438,9 +450,6 @@ struct ContentView: View {
             .padding(.horizontal, 12)
 
             if let status, !status.repos.isEmpty || !status.testflightApps.isEmpty {
-                let visibleRepos = status.repos.filter { matches($0.name) }
-                let visibleTestflightApps = status.testflightApps.filter { matches($0.name) }
-
                 ScrollView {
                     VStack(spacing: 10) {
                         ForEach(visibleRepos) { repo in
@@ -496,20 +505,17 @@ struct ContentView: View {
             .padding(.bottom, 10)
         }
         // No idealWidth/idealHeight here on purpose: AppDelegate sets the
-        // real frame imperatively (idealContentWidth/Height on open,
-        // shrinkToFitIfNeeded after) and measures the TRUE content size via
-        // sizeThatFits for that — an idealHeight hint here would anchor
-        // that measurement to this fixed number instead of actual content,
-        // which is exactly why shrink-on-open wasn't shrinking: it kept
-        // reporting ~420 regardless of how short the collapsed list was.
+        // real frame imperatively, from the counts reported below.
         .frame(minWidth: 280, maxWidth: .infinity,
                minHeight: 240, maxHeight: .infinity)
-        // The panel's height is otherwise only ever set once at open-time
-        // from a rough per-card estimate (AppDelegate.idealContentHeight) —
-        // it has no idea "errors only" or a search filter just removed most
-        // of the visible content. Ask AppDelegate to re-measure and shrink
-        // to fit whenever either one changes.
-        .onChange(of: errorsOnly) { _ in onContentSizeMightHaveChanged() }
-        .onChange(of: searchText) { _ in onContentSizeMightHaveChanged() }
+        // AppDelegate has no idea "errors only" or a search filter just
+        // changed which/how-many cards are visible — report the real counts
+        // every time they could have changed (including first appearance,
+        // since errorsOnly defaults to true so even the FIRST render is
+        // already filtered) so it can size the panel correctly.
+        .onAppear { onContentSizeMightHaveChanged(expandedCount, collapsedCount, visibleTestflightApps.count) }
+        .onChange(of: errorsOnly) { _ in onContentSizeMightHaveChanged(expandedCount, collapsedCount, visibleTestflightApps.count) }
+        .onChange(of: searchText) { _ in onContentSizeMightHaveChanged(expandedCount, collapsedCount, visibleTestflightApps.count) }
+        .onChange(of: status?.repos.count) { _ in onContentSizeMightHaveChanged(expandedCount, collapsedCount, visibleTestflightApps.count) }
     }
 }
