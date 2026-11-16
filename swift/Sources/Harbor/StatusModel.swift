@@ -44,10 +44,14 @@ struct HistoryEntry: Codable, Equatable {
     // returned run now (not just the latest), but poll.sh's fallback
     // entries never populate it.
     let stages: [RunningStage]?
+    // GitHub calls this a "run" ID, GitLab a "pipeline" ID — one neutral
+    // field name either way. Also optional: fallback entries never set it.
+    let runId: String?
 
     enum CodingKeys: String, CodingKey {
         case state, url, stages
         case createdAt = "created_at"
+        case runId = "run_id"
     }
 
     var stageList: [RunningStage] { stages ?? [] }

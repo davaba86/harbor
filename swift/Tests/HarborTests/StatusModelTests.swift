@@ -132,7 +132,7 @@ final class StatusModelTests: XCTestCase {
 
     func testHistoryEntryStagesPresent() {
         let stages = [RunningStage(name: "validate", status: .ok, jobs: nil), RunningStage(name: "test", status: .running, jobs: nil)]
-        let entry = HistoryEntry(state: .running, url: "", createdAt: "", stages: stages)
+        let entry = HistoryEntry(state: .running, url: "", createdAt: "", stages: stages, runId: nil)
         XCTAssertEqual(entry.stageList, stages)
     }
 

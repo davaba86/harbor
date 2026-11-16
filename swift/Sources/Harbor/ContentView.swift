@@ -207,6 +207,12 @@ struct RepoCardView: View {
                                     .fontWeight(.semibold)
                             }
 
+                            if let runId = entry.runId, !runId.isEmpty {
+                                Text("\(repo.platform == "github" ? "Run" : "Pipeline") #\(runId)")
+                                    .font(.system(.caption2, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                            }
+
                             if isNewest, let step = repo.runningStep {
                                 Text("Running · \(step)")
                                     .font(.system(.caption2, design: .monospaced))

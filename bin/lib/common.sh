@@ -124,8 +124,8 @@ harbor::fetch_github() {
       fi
     fi
 
-    entry=$(jq -n --arg state "$entry_state" --arg url "$entry_url" --arg created_at "$entry_updated" --argjson stages "$stages_i" \
-      '{state: $state, url: $url, created_at: $created_at, stages: $stages}')
+    entry=$(jq -n --arg state "$entry_state" --arg url "$entry_url" --arg created_at "$entry_updated" --argjson stages "$stages_i" --arg run_id "$run_id" \
+      '{state: $state, url: $url, created_at: $created_at, stages: $stages, run_id: $run_id}')
     entries=$(echo "$entries" | jq --argjson e "$entry" '. + [$e]')
   done
 
@@ -234,8 +234,8 @@ harbor::fetch_gitlab() {
       fi
     fi
 
-    entry=$(jq -n --arg state "$entry_state" --arg url "$entry_url" --arg created_at "$entry_updated" --argjson stages "$stages_i" \
-      '{state: $state, url: $url, created_at: $created_at, stages: $stages}')
+    entry=$(jq -n --arg state "$entry_state" --arg url "$entry_url" --arg created_at "$entry_updated" --argjson stages "$stages_i" --arg run_id "$pipeline_id" \
+      '{state: $state, url: $url, created_at: $created_at, stages: $stages, run_id: $run_id}')
     entries=$(echo "$entries" | jq --argjson e "$entry" '. + [$e]')
   done
 
