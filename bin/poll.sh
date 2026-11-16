@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
-# Harbor poller: fetches latest pipeline status for every repo in
+# Harbor poller: fetches latest pipeline status for repos in
 # ~/.harbor/config.json and writes ~/.harbor/status.json atomically.
+#
+# Usage:
+#   poll.sh            refresh every configured repo (the normal launchd cycle)
+#   poll.sh <name>      refresh just that one repo in place — used by the
+#                       app's per-card "Refresh" button, so clicking one
+#                       repo doesn't wait on or re-fetch every other one.
 set -uo pipefail
 cd "$(dirname "$0")"
 source lib/common.sh
@@ -10,6 +16,7 @@ CONFIG="$HARBOR_DIR/config.json"
 STATUS_FILE="$HARBOR_DIR/status.json"
 ERROR_LOG="$HARBOR_DIR/errors.log"
 TMP_FILE="$HARBOR_DIR/status.json.tmp"
+TARGET_REPO="${1:-}"
 
 mkdir -p "$HARBOR_DIR"
 
@@ -22,39 +29,38 @@ fi
 prev_status="{}"
 [ -f "$STATUS_FILE" ] && prev_status=$(cat "$STATUS_FILE")
 
-entries="[]"
-repo_count=$(jq '.repos | length' "$CONFIG")
-
-for i in $(seq 0 $((repo_count - 1))); do
-  name=$(jq -r ".repos[$i].name" "$CONFIG")
-  path=$(jq -r ".repos[$i].path" "$CONFIG")
+# poll::fetch_one <name> <path>
+# Echoes the normalized status entry for one repo, applying the same
+# fallback rules either mode uses: auth error surfaces immediately, any
+# other fetch failure keeps the last-known entry (or falls back to "stale"
+# if there's no prior entry to keep), unknown platform / missing path just
+# logs and echoes nothing.
+poll::fetch_one() {
+  local name="$1" path="$2"
 
   if [ ! -d "$path/.git" ]; then
     echo "$(date -u +%FT%TZ) [$name] path missing or not a git repo: $path" >> "$ERROR_LOG"
-    continue
+    return 1
   fi
 
+  local platform result fetch_status=0
   platform=$(harbor::detect_platform "$path")
-  result=""
-  fetch_status=0
   case "$platform" in
     github) result=$(harbor::fetch_github "$path" "$name"); fetch_status=$? ;;
     gitlab) result=$(harbor::fetch_gitlab "$path" "$name"); fetch_status=$? ;;
     *)
       echo "$(date -u +%FT%TZ) [$name] unknown platform for remote" >> "$ERROR_LOG"
-      continue
+      return 1
       ;;
   esac
 
+  local now entry
   now=$(date -u +%FT%TZ)
 
   if [ "$fetch_status" -eq 2 ]; then
-    # Auth error: surface immediately, not stale.
     entry=$(jq -n --arg name "$name" --arg platform "$platform" \
       '{name: $name, platform: $platform, branch: "", state: "auth_error", label: "Auth", url: "", updated_at: ""}')
   elif [ "$fetch_status" -ne 0 ] || [ -z "$result" ]; then
-    # Fetch failed: keep last-known entry, marked stale by its own updated_at age
-    # (the xbar plugin computes staleness from fetched_at, not by mutating state here).
     echo "$(date -u +%FT%TZ) [$name] fetch failed, keeping last known state" >> "$ERROR_LOG"
     entry=$(echo "$prev_status" | jq --arg name "$name" '.repos[]? | select(.name == $name)')
     [ -z "$entry" ] && entry=$(jq -n --arg name "$name" --arg platform "$platform" \
@@ -63,7 +69,38 @@ for i in $(seq 0 $((repo_count - 1))); do
     entry="$result"
   fi
 
-  entry=$(echo "$entry" | jq --arg fetched_at "$now" '. + {fetched_at: $fetched_at}')
+  echo "$entry" | jq --arg fetched_at "$now" '. + {fetched_at: $fetched_at}'
+}
+
+if [ -n "$TARGET_REPO" ]; then
+  path=$(jq -r --arg n "$TARGET_REPO" '.repos[] | select(.name == $n) | .path' "$CONFIG")
+  if [ -z "$path" ]; then
+    echo "$(date -u +%FT%TZ) [$TARGET_REPO] not found in config" >> "$ERROR_LOG"
+    exit 1
+  fi
+
+  entry=$(poll::fetch_one "$TARGET_REPO" "$path")
+  [ -z "$entry" ] && exit 0
+
+  # In-place replace by name (map, not filter+append) so this never
+  # reorders the other repos — a full refresh-all run would otherwise be
+  # the only thing that ever changes card order, which would be confusing.
+  jq --arg name "$TARGET_REPO" --argjson e "$entry" --arg generated_at "$(date -u +%FT%TZ)" '
+    .generated_at = $generated_at |
+    .repos |= map(if .name == $name then $e else . end)
+  ' "$STATUS_FILE" > "$TMP_FILE"
+  mv "$TMP_FILE" "$STATUS_FILE"
+  exit 0
+fi
+
+entries="[]"
+repo_count=$(jq '.repos | length' "$CONFIG")
+
+for i in $(seq 0 $((repo_count - 1))); do
+  name=$(jq -r ".repos[$i].name" "$CONFIG")
+  path=$(jq -r ".repos[$i].path" "$CONFIG")
+  entry=$(poll::fetch_one "$name" "$path")
+  [ -z "$entry" ] && continue
   entries=$(echo "$entries" | jq --argjson e "$entry" '. + [$e]')
 done
 

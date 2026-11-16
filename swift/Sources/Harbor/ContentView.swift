@@ -120,11 +120,15 @@ struct StageListView: View {
 struct RepoCardView: View {
     let repo: RepoStatus
     let staleThreshold: Int
+    let isRefreshing: Bool
+    let onRefresh: () -> Void
     @State private var selectedIndex: Int
 
-    init(repo: RepoStatus, staleThreshold: Int) {
+    init(repo: RepoStatus, staleThreshold: Int, isRefreshing: Bool, onRefresh: @escaping () -> Void) {
         self.repo = repo
         self.staleThreshold = staleThreshold
+        self.isRefreshing = isRefreshing
+        self.onRefresh = onRefresh
         _selectedIndex = State(initialValue: max(repo.recentHistory.count - 1, 0))
     }
 
@@ -147,6 +151,18 @@ struct RepoCardView: View {
                         .fontWeight(.semibold)
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer()
+                    Button(action: onRefresh) {
+                        if isRefreshing {
+                            ProgressView().controlSize(.mini)
+                        } else {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isRefreshing)
+                    .help("Refresh this repo")
                     Image(systemName: display.state.symbol)
                         .foregroundStyle(display.state.color)
                 }
@@ -281,9 +297,11 @@ struct ContentView: View {
     let status: HarborStatus?
     let staleThreshold: Int
     let isRefreshing: Bool
+    let refreshingRepoNames: Set<String>
     let onQuit: () -> Void
     let onRevealConfig: () -> Void
     let onRefreshAll: () -> Void
+    let onRefreshRepo: (String) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -311,7 +329,9 @@ struct ContentView: View {
                 ScrollView {
                     VStack(spacing: 8) {
                         ForEach(status.repos) { repo in
-                            RepoCardView(repo: repo, staleThreshold: staleThreshold)
+                            RepoCardView(repo: repo, staleThreshold: staleThreshold,
+                                         isRefreshing: refreshingRepoNames.contains(repo.name),
+                                         onRefresh: { onRefreshRepo(repo.name) })
                         }
 
                         // A clear section break, not just a spacing gap —

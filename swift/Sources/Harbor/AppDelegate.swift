@@ -22,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var lastRepoNames: [String] = []
     private var lastRepos: [RepoStatus] = []
     private var isRefreshing = false
+    private var refreshingRepoNames: Set<String> = []
     private let statusPath = NSString(string: "~/.harbor/status.json").expandingTildeInPath
     private let configPath = NSString(string: "~/.harbor/config.json").expandingTildeInPath
     // Set by install.sh into the launchd plist's EnvironmentVariables — the
@@ -133,10 +134,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         panel.delegate = self
 
         hostingController = NSHostingController(
-            rootView: ContentView(status: nil, staleThreshold: 180, isRefreshing: false,
+            rootView: ContentView(status: nil, staleThreshold: 180, isRefreshing: false, refreshingRepoNames: [],
                                    onQuit: { NSApp.terminate(nil) },
                                    onRevealConfig: { [weak self] in self?.revealConfig() },
-                                   onRefreshAll: { [weak self] in self?.refreshAllNow() })
+                                   onRefreshAll: { [weak self] in self?.refreshAllNow() },
+                                   onRefreshRepo: { [weak self] name in self?.refreshRepoNow(name) })
         )
         panel.contentViewController = hostingController
 
@@ -194,9 +196,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         )?.withSymbolConfiguration(config)
 
         hostingController.rootView = ContentView(status: status, staleThreshold: threshold, isRefreshing: isRefreshing,
+                                                  refreshingRepoNames: refreshingRepoNames,
                                                   onQuit: { NSApp.terminate(nil) },
                                                   onRevealConfig: { [weak self] in self?.revealConfig() },
-                                                  onRefreshAll: { [weak self] in self?.refreshAllNow() })
+                                                  onRefreshAll: { [weak self] in self?.refreshAllNow() },
+                                                  onRefreshRepo: { [weak self] name in self?.refreshRepoNow(name) })
+    }
+
+    /// Same as refreshAllNow, but for a single card's "Refresh" button:
+    /// runs poll.sh <name> (the single-repo mode) + notify.sh, so clicking
+    /// one repo doesn't wait on or re-fetch every other one. Tracked per
+    /// repo name rather than one global flag, so refreshing one card
+    /// doesn't disable every other card's button.
+    private func refreshRepoNow(_ name: String) {
+        guard !refreshingRepoNames.contains(name), let repoDir else { return }
+        refreshingRepoNames.insert(name)
+        refresh()
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/bash")
+            // Repo name passed as a real argument ($2), not interpolated
+            // into the shell string — safe regardless of what characters
+            // end up in it, unlike refreshAllNow's fixed/trusted repoDir-only command.
+            process.arguments = ["-c", "\"$1/bin/poll.sh\" \"$2\" && \"$1/bin/notify.sh\"", "bash", repoDir, name]
+            try? process.run()
+            process.waitUntilExit()
+
+            DispatchQueue.main.async {
+                self?.refreshingRepoNames.remove(name)
+                self?.refresh()
+            }
+        }
     }
 
     /// Runs poll.sh + notify.sh right now instead of waiting for launchd's
