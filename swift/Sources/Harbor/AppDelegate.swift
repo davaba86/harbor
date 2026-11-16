@@ -139,7 +139,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                                    onQuit: { NSApp.terminate(nil) },
                                    onRevealConfig: { [weak self] in self?.revealConfig() },
                                    onRefreshAll: { [weak self] in self?.refreshAllNow() },
-                                   onRefreshRepo: { [weak self] name in self?.refreshRepoNow(name) })
+                                   onRefreshRepo: { [weak self] name in self?.refreshRepoNow(name) },
+                                   onContentSizeMightHaveChanged: { [weak self] in self?.shrinkToFitIfNeeded() })
         )
         panel.contentViewController = hostingController
 
@@ -201,7 +202,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                                                   onQuit: { NSApp.terminate(nil) },
                                                   onRevealConfig: { [weak self] in self?.revealConfig() },
                                                   onRefreshAll: { [weak self] in self?.refreshAllNow() },
-                                                  onRefreshRepo: { [weak self] name in self?.refreshRepoNow(name) })
+                                                  onRefreshRepo: { [weak self] name in self?.refreshRepoNow(name) },
+                                                  onContentSizeMightHaveChanged: { [weak self] in self?.shrinkToFitIfNeeded() })
+    }
+
+    /// Measures the view's real fitting height at its current width and
+    /// shrinks the panel down to match if there's slack — e.g. the "errors
+    /// only" toggle collapsing most cards leaves a lot of dead space below
+    /// the content, since idealContentHeight's per-card estimate above was
+    /// computed for the full expanded list at open-time and has no idea the
+    /// toggle exists. Only ever shrinks (never grows past what the panel
+    /// was already opened at) and keeps the TOP edge fixed — the bottom
+    /// edge moves up, matching how the user described wanting this to feel.
+    /// Not hooked into the periodic 5s refresh timer, deliberately: that
+    /// decoupling is what fixed the original grow-then-shrink flicker bug,
+    /// and this path is opt-in (only fired by deliberate toggle/search
+    /// interaction in ContentView), not automatic background refresh.
+    private func shrinkToFitIfNeeded() {
+        guard panel.isVisible else { return }
+        let fitting = hostingController.sizeThatFits(
+            in: NSSize(width: panel.frame.width, height: .greatestFiniteMagnitude)
+        )
+        let targetHeight = max(fitting.height, panel.minSize.height)
+        guard targetHeight < panel.frame.height - 4 else { return } // small tolerance against layout jitter
+
+        var frame = panel.frame
+        let delta = frame.height - targetHeight
+        frame.origin.y += delta
+        frame.size.height = targetHeight
+        panel.setFrame(frame, display: true, animate: true)
     }
 
     /// Same as refreshAllNow, but for a single card's "Refresh" button:

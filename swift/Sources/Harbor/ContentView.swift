@@ -356,6 +356,7 @@ struct ContentView: View {
     let onRevealConfig: () -> Void
     let onRefreshAll: () -> Void
     let onRefreshRepo: (String) -> Void
+    let onContentSizeMightHaveChanged: () -> Void
     @State private var searchText = ""
     @State private var errorsOnly = false
 
@@ -471,5 +472,12 @@ struct ContentView: View {
         }
         .frame(minWidth: 280, idealWidth: 320, maxWidth: .infinity,
                minHeight: 240, idealHeight: 420, maxHeight: .infinity)
+        // The panel's height is otherwise only ever set once at open-time
+        // from a rough per-card estimate (AppDelegate.idealContentHeight) —
+        // it has no idea "errors only" or a search filter just removed most
+        // of the visible content. Ask AppDelegate to re-measure and shrink
+        // to fit whenever either one changes.
+        .onChange(of: errorsOnly) { _ in onContentSizeMightHaveChanged() }
+        .onChange(of: searchText) { _ in onContentSizeMightHaveChanged() }
     }
 }
