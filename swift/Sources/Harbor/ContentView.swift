@@ -173,6 +173,19 @@ struct RepoCardView: View {
                     .buttonStyle(.plain)
                     .disabled(isRefreshing)
                     .help("Refresh this repo")
+                    if !repo.url.isEmpty {
+                        Button(action: {
+                            if let url = URL(string: repo.url) {
+                                NSWorkspace.shared.open(url)
+                            }
+                        }) {
+                            Image(systemName: "arrow.up.right.square")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Open latest run in browser")
+                    }
                     Image(systemName: display.state.symbol)
                         .foregroundStyle(display.state.color)
                 }

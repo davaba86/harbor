@@ -73,8 +73,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             .map { ($0 as NSString).size(withAttributes: [.font: nameFont]).width }
             .max() ?? 0
         // card horizontal padding (10 left + 10 right) + accent bar (4) +
-        // spacer/icon on the title row (~28)
-        let nameChrome: CGFloat = 10 + 10 + 4 + 28
+        // the three title-row icons (refresh, open-in-browser, status) with
+        // their spacing (~46)
+        let nameChrome: CGFloat = 10 + 10 + 4 + 46
 
         // Measures the same default-selected run every card opens to (the
         // newest/"Latest" entry) — matching RepoCardView's own default
