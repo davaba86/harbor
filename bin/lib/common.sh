@@ -207,10 +207,19 @@ harbor::fetch_gitlab() {
       # stage's aggregate status) — matches GitLab's own pipeline UI, which
       # shows every job inside each stage column, not just a pass/fail per
       # stage. No extra API cost: same jobs_json already fetched above.
+      #
+      # Stage order: GitLab's own pipelines/:id/jobs endpoint returns jobs
+      # by id DESCENDING (newest-looking first), not stage-execution order —
+      # confirmed against real data where a later stage's job had a higher
+      # id than an earlier stage's and so wrongly sorted first under a
+      # first-appearance scheme. Job id is assigned at pipeline-creation
+      # time following .gitlab-ci.yml's declared stage order, so sorting
+      # each stage by its MINIMUM job id (ascending) reconstructs the real
+      # validate -> test -> build -> ... order regardless of API order.
       stages_i=$(echo "$jobs_json" | jq '
-        [.[] | {stage: .stage, status: .status, name: .name}] as $jobs
-        | (reduce $jobs[] as $j ([]; if (. | index($j.stage)) then . else . + [$j.stage] end)) as $ordered
-        | [$ordered[] as $s | ($jobs | map(select(.stage == $s))) as $sj | {
+        [.[] | {stage: .stage, status: .status, name: .name, id: .id}] as $jobs
+        | ($jobs | group_by(.stage) | map({stage: .[0].stage, min_id: (map(.id) | min)}) | sort_by(.min_id) | map(.stage)) as $ordered
+        | [$ordered[] as $s | ($jobs | map(select(.stage == $s)) | sort_by(.id)) as $sj | {
             name: $s,
             status: (
               if ($sj | any(.status == "failed" or .status == "canceled")) then "failed"
