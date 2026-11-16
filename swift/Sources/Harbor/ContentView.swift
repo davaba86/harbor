@@ -132,12 +132,18 @@ struct RepoCardView: View {
     let staleThreshold: Int
     let isRefreshing: Bool
     let onRefresh: () -> Void
+    // When true, a healthy ("ok") repo collapses to just the title row —
+    // the "errors only" toolbar toggle. Anything else (failed, running,
+    // auth_error, stale) stays fully expanded either way, since those are
+    // exactly the states worth looking at without an extra click.
+    let collapseWhenHealthy: Bool
     @State private var selectedIndex: Int
 
-    init(repo: RepoStatus, staleThreshold: Int, isRefreshing: Bool, onRefresh: @escaping () -> Void) {
+    init(repo: RepoStatus, staleThreshold: Int, isRefreshing: Bool, collapseWhenHealthy: Bool, onRefresh: @escaping () -> Void) {
         self.repo = repo
         self.staleThreshold = staleThreshold
         self.isRefreshing = isRefreshing
+        self.collapseWhenHealthy = collapseWhenHealthy
         self.onRefresh = onRefresh
         _selectedIndex = State(initialValue: max(repo.recentHistory.count - 1, 0))
     }
@@ -152,51 +158,71 @@ struct RepoCardView: View {
         repo.recentHistory.indices.contains(selectedIndex) ? repo.recentHistory[selectedIndex] : nil
     }
 
+    @ViewBuilder
+    var titleRow: some View {
+        HStack(alignment: .top) {
+            Text(repo.name)
+                .font(.system(.body, design: .monospaced))
+                .fontWeight(.semibold)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer()
+            Button(action: onRefresh) {
+                if isRefreshing {
+                    ProgressView().controlSize(.mini)
+                } else {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .buttonStyle(.plain)
+            .disabled(isRefreshing)
+            .help("Refresh this repo")
+            if let entryUrl = selectedEntry?.url, !entryUrl.isEmpty {
+                Button(action: {
+                    if let url = URL(string: entryUrl) {
+                        NSWorkspace.shared.open(url)
+                    }
+                }) {
+                    Image(systemName: "arrow.up.right.square")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Open selected run in browser")
+            }
+            Image(systemName: display.state.symbol)
+                .foregroundStyle(display.state.color)
+        }
+    }
+
+    var isCollapsed: Bool { collapseWhenHealthy && display.state == .ok }
+
     var body: some View {
         HStack(spacing: 0) {
             Rectangle()
                 .fill(display.state.color)
                 .frame(width: 4)
 
-            VStack(alignment: .leading, spacing: 8) {
-                // .top alignment + fixedSize so a name that wraps (past the
-                // panel's width cap, see AppDelegate.idealContentWidth)
-                // grows downward instead of compressing or clipping, with
-                // the status icon staying pinned to the first line.
-                HStack(alignment: .top) {
-                    Text(repo.name)
-                        .font(.system(.body, design: .monospaced))
-                        .fontWeight(.semibold)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Spacer()
-                    Button(action: onRefresh) {
-                        if isRefreshing {
-                            ProgressView().controlSize(.mini)
-                        } else {
-                            Image(systemName: "arrow.clockwise")
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(isRefreshing)
-                    .help("Refresh this repo")
-                    if let entryUrl = selectedEntry?.url, !entryUrl.isEmpty {
-                        Button(action: {
-                            if let url = URL(string: entryUrl) {
-                                NSWorkspace.shared.open(url)
-                            }
-                        }) {
-                            Image(systemName: "arrow.up.right.square")
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.plain)
-                        .help("Open selected run in browser")
-                    }
-                    Image(systemName: display.state.symbol)
-                        .foregroundStyle(display.state.color)
-                }
+            if isCollapsed {
+                titleRow
+                    .padding(10)
+            } else {
+                expandedBody
+            }
+        }
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+
+    @ViewBuilder
+    var expandedBody: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            // .top alignment + fixedSize so a name that wraps (past the
+            // panel's width cap, see AppDelegate.idealContentWidth)
+            // grows downward instead of compressing or clipping, with
+            // the status icon staying pinned to the first line.
+            titleRow
 
             if repo.recentHistory.isEmpty {
                 Text("No run history yet")
@@ -274,10 +300,7 @@ struct RepoCardView: View {
             .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .background(Color(nsColor: .controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
     }
-}
 
 struct TestFlightCardView: View {
     let app: TestFlightStatus
@@ -333,6 +356,12 @@ struct ContentView: View {
     let onRevealConfig: () -> Void
     let onRefreshAll: () -> Void
     let onRefreshRepo: (String) -> Void
+    @State private var searchText = ""
+    @State private var errorsOnly = false
+
+    private func matches(_ name: String) -> Bool {
+        searchText.isEmpty || name.localizedCaseInsensitiveContains(searchText)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -356,12 +385,43 @@ struct ContentView: View {
             .padding(.leading, 12)
             .padding(.top, 10)
 
+            // Search + "errors only" filter the full list down, so finding
+            // one repo in a large watch list (or seeing only what's
+            // currently broken/running) doesn't need scrolling past every
+            // healthy card first.
+            HStack(spacing: 8) {
+                HStack(spacing: 4) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    TextField("Search", text: $searchText)
+                        .textFieldStyle(.plain)
+                        .font(.caption)
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 4)
+                .background(Color.secondary.opacity(0.1))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+
+                Toggle(isOn: $errorsOnly) {
+                    Text("Errors only")
+                        .font(.caption)
+                }
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+            }
+            .padding(.horizontal, 12)
+
             if let status, !status.repos.isEmpty || !status.testflightApps.isEmpty {
+                let visibleRepos = status.repos.filter { matches($0.name) }
+                let visibleTestflightApps = status.testflightApps.filter { matches($0.name) }
+
                 ScrollView {
                     VStack(spacing: 8) {
-                        ForEach(status.repos) { repo in
+                        ForEach(visibleRepos) { repo in
                             RepoCardView(repo: repo, staleThreshold: staleThreshold,
                                          isRefreshing: refreshingRepoNames.contains(repo.name),
+                                         collapseWhenHealthy: errorsOnly,
                                          onRefresh: { onRefreshRepo(repo.name) })
                         }
 
@@ -369,7 +429,7 @@ struct ContentView: View {
                         // TestFlight builds aren't a git-based pipeline, so
                         // they get their own labeled divider instead of
                         // blending into the repo list above.
-                        if !status.testflightApps.isEmpty {
+                        if !visibleTestflightApps.isEmpty {
                             HStack(spacing: 8) {
                                 Rectangle().fill(.secondary.opacity(0.25)).frame(height: 1)
                                 Text("TESTFLIGHT")
@@ -379,9 +439,16 @@ struct ContentView: View {
                             }
                             .padding(.top, 4)
 
-                            ForEach(status.testflightApps) { app in
+                            ForEach(visibleTestflightApps) { app in
                                 TestFlightCardView(app: app, staleThreshold: staleThreshold)
                             }
+                        }
+
+                        if visibleRepos.isEmpty && visibleTestflightApps.isEmpty {
+                            Text("No matches for \"\(searchText)\"")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .padding(.top, 20)
                         }
                     }
                     .padding(.horizontal, 10)
