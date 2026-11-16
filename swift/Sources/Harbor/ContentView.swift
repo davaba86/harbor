@@ -495,8 +495,15 @@ struct ContentView: View {
             .padding(.horizontal, 12)
             .padding(.bottom, 10)
         }
-        .frame(minWidth: 280, idealWidth: 320, maxWidth: .infinity,
-               minHeight: 240, idealHeight: 420, maxHeight: .infinity)
+        // No idealWidth/idealHeight here on purpose: AppDelegate sets the
+        // real frame imperatively (idealContentWidth/Height on open,
+        // shrinkToFitIfNeeded after) and measures the TRUE content size via
+        // sizeThatFits for that — an idealHeight hint here would anchor
+        // that measurement to this fixed number instead of actual content,
+        // which is exactly why shrink-on-open wasn't shrinking: it kept
+        // reporting ~420 regardless of how short the collapsed list was.
+        .frame(minWidth: 280, maxWidth: .infinity,
+               minHeight: 240, maxHeight: .infinity)
         // The panel's height is otherwise only ever set once at open-time
         // from a rough per-card estimate (AppDelegate.idealContentHeight) —
         // it has no idea "errors only" or a search filter just removed most

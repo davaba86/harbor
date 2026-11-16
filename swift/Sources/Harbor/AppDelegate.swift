@@ -324,7 +324,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // first click, not just after a later toggle. Immediately correct
         // it down to the real fitting height (same shrink-from-bottom,
         // top-stays-put logic the toggle/search path already uses).
-        shrinkToFitIfNeeded()
+        // Deferred one tick: measuring synchronously here can run before
+        // SwiftUI finishes laying out the content for the frame we just
+        // set, giving back a stale/too-large size.
+        DispatchQueue.main.async { [weak self] in
+            self?.shrinkToFitIfNeeded()
+        }
     }
 
     func windowDidResignKey(_ notification: Notification) {
