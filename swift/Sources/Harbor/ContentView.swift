@@ -143,6 +143,14 @@ struct RepoCardView: View {
     }
 
     var display: DisplayState { DisplayState.compute(repo: repo, staleThreshold: staleThreshold) }
+    // Whichever run is currently selected in the picker (defaults to
+    // newest) — the title-row "open in browser" icon follows the
+    // selection rather than always opening the latest run, so it's a true
+    // move of the old per-run "Open in Browser" button, not a second,
+    // narrower shortcut that loses the ability to open an older run.
+    var selectedEntry: HistoryEntry? {
+        repo.recentHistory.indices.contains(selectedIndex) ? repo.recentHistory[selectedIndex] : nil
+    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -173,9 +181,9 @@ struct RepoCardView: View {
                     .buttonStyle(.plain)
                     .disabled(isRefreshing)
                     .help("Refresh this repo")
-                    if !repo.url.isEmpty {
+                    if let entryUrl = selectedEntry?.url, !entryUrl.isEmpty {
                         Button(action: {
-                            if let url = URL(string: repo.url) {
+                            if let url = URL(string: entryUrl) {
                                 NSWorkspace.shared.open(url)
                             }
                         }) {
@@ -184,7 +192,7 @@ struct RepoCardView: View {
                                 .foregroundStyle(.secondary)
                         }
                         .buttonStyle(.plain)
-                        .help("Open latest run in browser")
+                        .help("Open selected run in browser")
                     }
                     Image(systemName: display.state.symbol)
                         .foregroundStyle(display.state.color)
@@ -254,15 +262,9 @@ struct RepoCardView: View {
                             if !entry.stageList.isEmpty {
                                 StageListView(stages: entry.stageList)
                             }
-
-                            if !entry.url.isEmpty {
-                                Button("Open in Browser") {
-                                    if let url = URL(string: entry.url) {
-                                        NSWorkspace.shared.open(url)
-                                    }
-                                }
-                                .font(.caption2)
-                            }
+                            // "Open in Browser" moved to the title row's
+                            // icon above (follows this same selection) —
+                            // no longer duplicated down here.
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
