@@ -382,7 +382,7 @@ struct ContentView: View {
     let onRefreshRepo: (String) -> Void
     let onContentSizeMightHaveChanged: () -> Void
     @State private var searchText = ""
-    @State private var errorsOnly = false
+    @State private var errorsOnly = true
 
     private func matches(_ name: String) -> Bool {
         searchText.isEmpty || name.localizedCaseInsensitiveContains(searchText)

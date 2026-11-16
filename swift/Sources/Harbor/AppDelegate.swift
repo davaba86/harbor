@@ -317,6 +317,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         )
         panel.setFrameOrigin(origin)
         panel.makeKeyAndOrderFront(nil)
+
+        // idealContentHeight above assumes every card is fully expanded —
+        // with "errors only" now defaulting to true, the panel opens with
+        // most cards collapsed, so that estimate is oversized from the very
+        // first click, not just after a later toggle. Immediately correct
+        // it down to the real fitting height (same shrink-from-bottom,
+        // top-stays-put logic the toggle/search path already uses).
+        shrinkToFitIfNeeded()
     }
 
     func windowDidResignKey(_ notification: Notification) {
