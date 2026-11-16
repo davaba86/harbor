@@ -67,8 +67,8 @@ struct StageListView: View {
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(alignment: .top, spacing: 14) {
-                ForEach(stages, id: \.name) { stage in
+            HStack(alignment: .top, spacing: 6) {
+                ForEach(Array(stages.enumerated()), id: \.element.name) { index, stage in
                     VStack(alignment: .leading, spacing: 4) {
                         HStack(spacing: 5) {
                             Image(systemName: stage.status.symbol)
@@ -89,6 +89,17 @@ struct StageListView: View {
                                     .foregroundStyle(job.status == .pending ? .secondary : .primary)
                             }
                         }
+                    }
+
+                    // Arrow connecting this stage to the next, so the
+                    // validate -> test -> build -> ... order reads as a
+                    // flow rather than loose columns — aligned to sit
+                    // roughly at the header row's vertical center.
+                    if index < stages.count - 1 {
+                        Image(systemName: "arrow.right")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .padding(.top, 2)
                     }
                 }
             }
