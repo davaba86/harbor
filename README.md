@@ -5,6 +5,14 @@ status badge in the macOS menu bar (a native SwiftUI app, auto-sized to your
 watch list) and fires a native notification the moment a watched pipeline
 fails.
 
+The panel has three tabs:
+
+- **CI/CD** — repo pipeline status (search + "errors only" filter)
+- **Apple** — TestFlight build status
+- **Local Repos** — read-only report of locally merged branches and
+  prunable `git worktree`s across your configured repos. It only reports —
+  nothing here deletes or prunes anything; that stays yours to do by hand.
+
 ## Install
 
 ```bash

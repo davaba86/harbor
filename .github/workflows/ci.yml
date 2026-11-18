@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Public repo: default to no token access at all. Neither job below needs
+# to write anything (no deploy, no PR comments), and nothing here touches
+# secrets — every test uses local scratch git repos, never a real
+# gh/glab network call — so read-only is also all a fork PR's run ever
+# needs, not just a hardening default.
+permissions:
+  contents: read
+
+# Cancel a still-running CI run for the same branch/PR when a new push
+# supersedes it, instead of burning runner minutes on stale commits.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  swift:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: swift
+    steps:
+      # Pinned to a commit SHA, not the v4 tag — a tag can be moved by
+      # whoever controls the action's repo, a SHA can't. Standard
+      # supply-chain hardening for a public repo's CI.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: swift build
+        run: swift build
+      - name: swift test
+        run: swift test
+
+  bash:
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Run bash test suite
+        run: |
+          set -e
+          for t in test/*.sh; do
+            echo "=== $t ==="
+            bash "$t"
+          done
