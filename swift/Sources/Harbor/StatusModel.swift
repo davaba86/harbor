@@ -240,6 +240,23 @@ enum WorstState {
     }
 }
 
+/// One prunable worktree, exactly as `git worktree list --porcelain`
+/// reports it (reason text is git's own, not reinterpreted).
+struct PrunableWorktree: Codable {
+    let path: String
+    let reason: String
+}
+
+/// Local-only git-hygiene report for one configured repo (bin/local-repos.sh),
+/// computed on demand when the Local Repos tab opens — read-only, no
+/// delete/prune action anywhere downstream of this.
+struct RepoBranchReport: Codable, Identifiable {
+    var id: String { name }
+    let name: String
+    let mergedBranches: [String]
+    let prunableWorktrees: [PrunableWorktree]
+}
+
 func formatAge(_ seconds: Int) -> String {
     if seconds < 60 { return "just now" }
     if seconds < 3600 { return "\(seconds / 60)m ago" }
@@ -247,6 +264,14 @@ func formatAge(_ seconds: Int) -> String {
 }
 
 func loadStatus(from path: String) -> HarborStatus? {
-    guard let data = FileManager.default.contents(atPath: path) else { return nil }
-    return try? JSONDecoder().decode(HarborStatus.self, from: data)
+    guard let data = FileManager.default.contents(atPath: path) else {
+        harborLog("loadStatus: no file at \(path)")
+        return nil
+    }
+    do {
+        return try JSONDecoder().decode(HarborStatus.self, from: data)
+    } catch {
+        harborLog("loadStatus: decode failed for \(path): \(error)")
+        return nil
+    }
 }

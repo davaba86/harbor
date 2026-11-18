@@ -174,8 +174,11 @@ harbor::fetch_gitlab() {
   updated_at=$(echo "$pipeline_json" | jq -r '.[0].updated_at // empty')
 
   case "$status" in
-    success) state="ok"; label="OK" ;;
-    failed|canceled|skipped) state="failed"; label="Failed" ;;
+    # "skipped" means GitLab never ran the pipeline's remaining jobs (e.g. an
+    # on_failure notify job with nothing to notify about) — benign, not a
+    # failure, same as the job/stage-level handling below already treats it.
+    success|skipped) state="ok"; label="OK" ;;
+    failed|canceled) state="failed"; label="Failed" ;;
     *) state="running"; label="Running" ;;
   esac
 
@@ -195,8 +198,8 @@ harbor::fetch_gitlab() {
     entry_updated=$(echo "$pipeline_json" | jq -r ".[$i].updated_at // empty")
 
     case "$entry_status" in
-      success) entry_state="ok" ;;
-      failed|canceled|skipped) entry_state="failed" ;;
+      success|skipped) entry_state="ok" ;;
+      failed|canceled) entry_state="failed" ;;
       *) entry_state="running" ;;
     esac
 

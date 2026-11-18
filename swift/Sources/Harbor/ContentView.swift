@@ -371,6 +371,82 @@ struct TestFlightCardView: View {
     }
 }
 
+enum HarborTab: String, CaseIterable {
+    case cicd = "CI/CD"
+    case apple = "Apple"
+    case localRepos = "Local Repos"
+}
+
+/// Local-only git-hygiene report: locally merged branches + prunable
+/// worktrees per repo, read-only. Fetched on demand (see
+/// AppDelegate.loadLocalRepos) when this tab is selected, not on the
+/// regular poll cycle — no delete/prune action anywhere here, matching
+/// Harbor's "report, don't act" posture for branch/worktree lifecycle.
+struct LocalReposView: View {
+    let reports: [RepoBranchReport]
+    let isLoading: Bool
+
+    private var flagged: [RepoBranchReport] {
+        reports.filter { !$0.mergedBranches.isEmpty || !$0.prunableWorktrees.isEmpty }
+    }
+
+    var body: some View {
+        if isLoading {
+            ProgressView().controlSize(.small)
+                .frame(maxWidth: .infinity)
+                .padding(.top, 20)
+        } else if flagged.isEmpty {
+            Text("Nothing to clean up")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.top, 20)
+        } else {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(flagged) { report in
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(report.name)
+                                .font(.system(.body))
+                                .fontWeight(.semibold)
+
+                            ForEach(report.mergedBranches, id: \.self) { branch in
+                                HStack(spacing: 5) {
+                                    Image(systemName: "arrow.triangle.merge")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                    Text(branch)
+                                        .font(.system(.caption, design: .monospaced))
+                                }
+                            }
+
+                            ForEach(report.prunableWorktrees, id: \.path) { worktree in
+                                VStack(alignment: .leading, spacing: 1) {
+                                    HStack(spacing: 5) {
+                                        Image(systemName: "externaldrive.badge.xmark")
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                        Text(worktree.path)
+                                            .font(.system(.caption, design: .monospaced))
+                                    }
+                                    Text(worktree.reason)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                        .padding(.leading, 19)
+                                }
+                            }
+                        }
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color(nsColor: .controlBackgroundColor))
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                    }
+                }
+                .padding(.horizontal, 10)
+            }
+        }
+    }
+}
+
 struct ContentView: View {
     let status: HarborStatus?
     let staleThreshold: Int
@@ -378,16 +454,23 @@ struct ContentView: View {
     let refreshingRepoNames: Set<String>
     let onQuit: () -> Void
     let onRevealConfig: () -> Void
+    let onOpenLog: () -> Void
     let onRefreshAll: () -> Void
     let onRefreshRepo: (String) -> Void
+    let onLocalReposTabSelected: () -> Void
+    let localRepoReports: [RepoBranchReport]
+    let isLoadingLocalRepos: Bool
     // Real post-filter/post-collapse counts, so AppDelegate can size the
     // panel arithmetically instead of asking SwiftUI's sizeThatFits for a
     // "natural" height through a ScrollView — a ScrollView always reports
     // back whatever height it's offered (that's what makes it scroll), so
     // it can never answer "how tall is my content" no matter what frame
     // modifiers wrap it. Counting visible/collapsed cards sidesteps that
-    // entirely.
-    let onContentSizeMightHaveChanged: (_ expandedCount: Int, _ collapsedCount: Int, _ testflightCount: Int) -> Void
+    // entirely. The tab is included so AppDelegate knows which sizing rule
+    // applies (e.g. Local Repos ignores these counts and uses a fixed
+    // height) — it reads only the counts relevant to that tab.
+    let onContentSizeMightHaveChanged: (_ tab: HarborTab, _ expandedCount: Int, _ collapsedCount: Int, _ testflightCount: Int) -> Void
+    @State private var selectedTab: HarborTab = .cicd
     @State private var searchText = ""
     @State private var errorsOnly = true
 
@@ -397,7 +480,7 @@ struct ContentView: View {
 
     var body: some View {
         let visibleRepos = (status?.repos ?? []).filter { matches($0.name) }
-        let visibleTestflightApps = (status?.testflightApps ?? []).filter { matches($0.name) }
+        let visibleTestflightApps = status?.testflightApps ?? []
         let collapsedCount = visibleRepos.filter { errorsOnly && DisplayState.compute(repo: $0, staleThreshold: staleThreshold).state == .ok }.count
         let expandedCount = visibleRepos.count - collapsedCount
 
@@ -422,82 +505,92 @@ struct ContentView: View {
             .padding(.leading, 12)
             .padding(.top, 10)
 
-            // Search + "errors only" filter the full list down, so finding
-            // one repo in a large watch list (or seeing only what's
-            // currently broken/running) doesn't need scrolling past every
-            // healthy card first.
-            HStack(spacing: 8) {
-                HStack(spacing: 5) {
-                    Image(systemName: "magnifyingglass")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                    TextField("Search", text: $searchText)
-                        .textFieldStyle(.plain)
-                        .font(.callout)
+            Picker("", selection: $selectedTab) {
+                ForEach(HarborTab.allCases, id: \.self) { tab in
+                    Text(tab.rawValue).tag(tab)
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(Color.secondary.opacity(0.1))
-                .clipShape(Capsule())
-
-                Toggle(isOn: $errorsOnly) {
-                    Text("Errors only")
-                        .font(.caption)
-                }
-                .toggleStyle(.switch)
-                .controlSize(.mini)
             }
+            .pickerStyle(.segmented)
+            .labelsHidden()
             .padding(.horizontal, 12)
 
-            if let status, !status.repos.isEmpty || !status.testflightApps.isEmpty {
-                ScrollView {
-                    VStack(spacing: 10) {
-                        ForEach(visibleRepos) { repo in
-                            RepoCardView(repo: repo, staleThreshold: staleThreshold,
-                                         isRefreshing: refreshingRepoNames.contains(repo.name),
-                                         collapseWhenHealthy: errorsOnly,
-                                         onRefresh: { onRefreshRepo(repo.name) })
+            if selectedTab == .cicd {
+                // Search + "errors only" filter the repo list down, so
+                // finding one repo in a large watch list (or seeing only
+                // what's currently broken/running) doesn't need scrolling
+                // past every healthy card first.
+                HStack(spacing: 8) {
+                    HStack(spacing: 5) {
+                        Image(systemName: "magnifyingglass")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        TextField("Search", text: $searchText)
+                            .textFieldStyle(.plain)
+                            .font(.callout)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Color.secondary.opacity(0.1))
+                    .clipShape(Capsule())
+
+                    Toggle(isOn: $errorsOnly) {
+                        Text("Errors only")
+                            .font(.caption)
+                    }
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
+                }
+                .padding(.horizontal, 12)
+
+                if let status, !status.repos.isEmpty {
+                    ScrollView {
+                        VStack(spacing: 10) {
+                            ForEach(visibleRepos) { repo in
+                                RepoCardView(repo: repo, staleThreshold: staleThreshold,
+                                             isRefreshing: refreshingRepoNames.contains(repo.name),
+                                             collapseWhenHealthy: errorsOnly,
+                                             onRefresh: { onRefreshRepo(repo.name) })
+                            }
+
+                            if visibleRepos.isEmpty {
+                                Text("No matches for \"\(searchText)\"")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .padding(.top, 20)
+                            }
                         }
-
-                        // A clear section break, not just a spacing gap —
-                        // TestFlight builds aren't a git-based pipeline, so
-                        // they get their own section label instead of
-                        // blending into the repo list above. Plain bold
-                        // label (no flanking lines) matches how macOS
-                        // Settings labels a group ("Known Networks"), not a
-                        // terminal-style divider.
-                        if !visibleTestflightApps.isEmpty {
-                            Text("TestFlight")
-                                .font(.callout)
-                                .fontWeight(.semibold)
-                                .foregroundStyle(.secondary)
-                                .padding(.top, 6)
-                                .padding(.leading, 2)
-
+                        .padding(.horizontal, 10)
+                    }
+                } else {
+                    Text("No status.json yet — check the launchd job")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(12)
+                }
+            } else if selectedTab == .apple {
+                if visibleTestflightApps.isEmpty {
+                    Text("No TestFlight apps configured")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(12)
+                } else {
+                    ScrollView {
+                        VStack(spacing: 10) {
                             ForEach(visibleTestflightApps) { app in
                                 TestFlightCardView(app: app, staleThreshold: staleThreshold)
                             }
                         }
-
-                        if visibleRepos.isEmpty && visibleTestflightApps.isEmpty {
-                            Text("No matches for \"\(searchText)\"")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .padding(.top, 20)
-                        }
+                        .padding(.horizontal, 10)
                     }
-                    .padding(.horizontal, 10)
                 }
             } else {
-                Text("No status.json yet — check the launchd job")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(12)
+                LocalReposView(reports: localRepoReports, isLoading: isLoadingLocalRepos)
             }
 
             Divider()
             HStack {
                 Button("Reveal Config", action: onRevealConfig)
+                Button("Open Log", action: onOpenLog)
                 Spacer()
                 Button("Quit Harbor", action: onQuit)
             }
@@ -507,15 +600,20 @@ struct ContentView: View {
         // No idealWidth/idealHeight here on purpose: AppDelegate sets the
         // real frame imperatively, from the counts reported below.
         .frame(minWidth: 280, maxWidth: .infinity,
-               minHeight: 240, maxHeight: .infinity)
-        // AppDelegate has no idea "errors only" or a search filter just
-        // changed which/how-many cards are visible — report the real counts
-        // every time they could have changed (including first appearance,
-        // since errorsOnly defaults to true so even the FIRST render is
-        // already filtered) so it can size the panel correctly.
-        .onAppear { onContentSizeMightHaveChanged(expandedCount, collapsedCount, visibleTestflightApps.count) }
-        .onChange(of: errorsOnly) { _ in onContentSizeMightHaveChanged(expandedCount, collapsedCount, visibleTestflightApps.count) }
-        .onChange(of: searchText) { _ in onContentSizeMightHaveChanged(expandedCount, collapsedCount, visibleTestflightApps.count) }
-        .onChange(of: status?.repos.count) { _ in onContentSizeMightHaveChanged(expandedCount, collapsedCount, visibleTestflightApps.count) }
+               minHeight: 160, maxHeight: .infinity)
+        // AppDelegate has no idea "errors only"/search/tab just changed
+        // which/how-many rows are visible — report the real counts every
+        // time they could have changed (including first appearance, since
+        // errorsOnly defaults to true so even the FIRST render is already
+        // filtered) so it can size the panel correctly.
+        .onAppear { onContentSizeMightHaveChanged(selectedTab, expandedCount, collapsedCount, visibleTestflightApps.count) }
+        .onChange(of: errorsOnly) { _ in onContentSizeMightHaveChanged(selectedTab, expandedCount, collapsedCount, visibleTestflightApps.count) }
+        .onChange(of: searchText) { _ in onContentSizeMightHaveChanged(selectedTab, expandedCount, collapsedCount, visibleTestflightApps.count) }
+        .onChange(of: status?.repos.count) { _ in onContentSizeMightHaveChanged(selectedTab, expandedCount, collapsedCount, visibleTestflightApps.count) }
+        .onChange(of: status?.testflightApps.count) { _ in onContentSizeMightHaveChanged(selectedTab, expandedCount, collapsedCount, visibleTestflightApps.count) }
+        .onChange(of: selectedTab) { newTab in
+            if newTab == .localRepos { onLocalReposTabSelected() }
+            onContentSizeMightHaveChanged(newTab, expandedCount, collapsedCount, visibleTestflightApps.count)
+        }
     }
 }
