@@ -327,9 +327,20 @@ struct RepoCardView: View {
         }
     }
 
+/// Same left-column picker over recent runs RepoCardView uses, minus the
+/// stage breakdown (builds have no CI-style stages) — lets an app that
+/// shipped several builds at once show which ones are stuck vs. fine,
+/// instead of only ever showing the newest.
 struct TestFlightCardView: View {
     let app: TestFlightStatus
     let staleThreshold: Int
+    @State private var selectedIndex: Int
+
+    init(app: TestFlightStatus, staleThreshold: Int) {
+        self.app = app
+        self.staleThreshold = staleThreshold
+        _selectedIndex = State(initialValue: max(app.recentHistory.count - 1, 0))
+    }
 
     var display: DisplayState { DisplayState.compute(testflight: app, staleThreshold: staleThreshold) }
 
@@ -339,7 +350,7 @@ struct TestFlightCardView: View {
                 .fill(display.state.color)
                 .frame(width: 4)
 
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .top) {
                     // paperplane badge distinguishes this at a glance as a
                     // TestFlight/App Store entry, not a git-based pipeline.
@@ -351,23 +362,77 @@ struct TestFlightCardView: View {
                         .fontWeight(.semibold)
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer()
+                    if let entryUrl = app.recentHistory.indices.contains(selectedIndex) ? app.recentHistory[selectedIndex].url : nil,
+                       !entryUrl.isEmpty {
+                        Button(action: {
+                            if let url = URL(string: entryUrl) { NSWorkspace.shared.open(url) }
+                        }) {
+                            Image(systemName: "arrow.up.right.square")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Open in App Store Connect")
+                    }
                     StatusBadge(state: display.state)
                 }
 
-                Text("\(app.label) · \(formatAge(display.ageSeconds))")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                if app.recentHistory.isEmpty {
+                    Text("\(app.label) · \(formatAge(display.ageSeconds))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    HStack(alignment: .top, spacing: 10) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            ForEach(Array(app.recentHistory.enumerated()), id: \.offset) { idx, entry in
+                                let isNewest = idx == app.recentHistory.count - 1
+                                Button(action: { selectedIndex = idx }) {
+                                    HStack(spacing: 6) {
+                                        Circle().fill(entry.state.color).frame(width: 7, height: 7)
+                                        Text(isNewest ? "Latest" : "Build \(idx + 1)")
+                                            .font(.caption2)
+                                    }
+                                    .padding(.vertical, 3)
+                                    .padding(.horizontal, 6)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(idx == selectedIndex ? Color.secondary.opacity(0.2) : .clear)
+                                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .frame(width: 74)
+
+                        Divider()
+
+                        if app.recentHistory.indices.contains(selectedIndex) {
+                            let entry = app.recentHistory[selectedIndex]
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack(spacing: 5) {
+                                    Image(systemName: entry.state.symbol)
+                                        .foregroundStyle(entry.state.color)
+                                    Text(entry.label)
+                                        .font(.caption)
+                                        .fontWeight(.semibold)
+                                }
+                                // Real build age (when THIS build was
+                                // uploaded), distinct from the card's own
+                                // badge above (which reflects polling
+                                // freshness via `display.ageSeconds`).
+                                Text("Uploaded \(formatAge(DisplayState.ageSeconds(fetchedAt: entry.uploadedAt)))")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                }
             }
             .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(Color(nsColor: .controlBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 12))
-        .contentShape(Rectangle())
-        .onTapGesture {
-            if let url = URL(string: app.url), !app.url.isEmpty {
-                NSWorkspace.shared.open(url)
-            }
-        }
     }
 }
 

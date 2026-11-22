@@ -89,7 +89,7 @@ harbor::fetch_apple() {
   [ -z "$app_id" ] && return 1
 
   resp=$(curl -s -w '\n%{http_code}' \
-    "$HARBOR_APPLE_API/v1/builds?filter%5Bapp%5D=$app_id&sort=-uploadedDate&limit=1&include=preReleaseVersion,betaAppReviewSubmission" \
+    "$HARBOR_APPLE_API/v1/builds?filter%5Bapp%5D=$app_id&sort=-uploadedDate&limit=3&include=preReleaseVersion,betaAppReviewSubmission" \
     -H "Authorization: Bearer $jwt")
   code=$(echo "$resp" | tail -1)
   body=$(echo "$resp" | sed '$d')
@@ -97,23 +97,37 @@ harbor::fetch_apple() {
   [ "$code" = "200" ] || return 1
   [ "$(echo "$body" | jq '.data | length')" -eq 0 ] && return 1
 
-  local processing_state build_number build_version review_state url now
-  processing_state=$(echo "$body" | jq -r '.data[0].attributes.processingState // "INVALID" | ascii_downcase')
-  build_number=$(echo "$body" | jq -r '.data[0].attributes.version // empty')
-  build_version=$(echo "$body" | jq -r '[.included[]? | select(.type=="preReleaseVersions")][0].attributes.version // empty')
-  [ -z "$build_version" ] && build_version="$build_number"
-  # betaReviewState is absent until the first beta review is actually
-  # submitted for this build — not every build has one, so this stays
-  # optional (null) rather than a guessed default state.
-  review_state=$(echo "$body" | jq -r '[.included[]? | select(.type=="betaAppReviewSubmissions")][0].attributes.betaReviewState // empty | ascii_downcase')
+  local url now entries history latest
   url="https://appstoreconnect.apple.com/apps/$app_id/testflight/ios"
   now=$(date -u +%FT%TZ)
 
-  jq -n \
-    --arg name "$name" --arg bundle_id "$bundle_id" --arg processing_state "$processing_state" \
-    --arg review_state "$review_state" --arg build_version "$build_version" --arg build_number "$build_number" \
-    --arg url "$url" --arg updated_at "$now" \
-    '{name: $name, bundle_id: $bundle_id, processing_state: $processing_state,
-      beta_review_status: (if $review_state == "" then null else $review_state end),
-      build_version: $build_version, build_number: $build_number, url: $url, updated_at: $updated_at}'
+  # Each build's preReleaseVersion (marketing version) and
+  # betaAppReviewSubmission (review state, absent until a review is
+  # actually submitted) are looked up from `included` BY ID, not by
+  # position — `included` isn't guaranteed to line up with `data`'s order
+  # once more than one build comes back.
+  entries=$(echo "$body" | jq -c --arg url "$url" '
+    .included as $inc
+    | [ .data[] | . as $b
+        | ($b.relationships.preReleaseVersion.data.id // "") as $prv_id
+        | ($b.relationships.betaAppReviewSubmission.data.id // "") as $bars_id
+        | ([$inc[]? | select(.type == "preReleaseVersions" and .id == $prv_id)][0].attributes.version // $b.attributes.version // "") as $build_version
+        | ([$inc[]? | select(.type == "betaAppReviewSubmissions" and .id == $bars_id)][0].attributes.betaReviewState // null) as $raw_review
+        | {
+            processing_state: ($b.attributes.processingState // "INVALID" | ascii_downcase),
+            beta_review_status: (if $raw_review == null then null else ($raw_review | ascii_downcase) end),
+            build_version: $build_version,
+            build_number: ($b.attributes.version // ""),
+            uploaded_at: ($b.attributes.uploadedDate // ""),
+            url: $url
+          }
+      ]
+  ')
+  history=$(echo "$entries" | jq 'reverse')
+  latest=$(echo "$entries" | jq '.[0]')
+
+  echo "$latest" | jq --arg name "$name" --arg bundle_id "$bundle_id" --arg updated_at "$now" --argjson history "$history" \
+    '{name: $name, bundle_id: $bundle_id, processing_state: .processing_state,
+      beta_review_status: .beta_review_status, build_version: .build_version,
+      build_number: .build_number, url: .url, updated_at: $updated_at, history: $history}'
 }

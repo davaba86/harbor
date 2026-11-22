@@ -48,7 +48,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     // card. Driven by real counts from ContentView now, not a guess.
     private let cardHeight: CGFloat = 130
     private let collapsedCardHeight: CGFloat = 44
-    private let testflightCardHeight: CGFloat = 60
+    // Same picker + divider + detail shape as the repo card (minus the
+    // stage boxes, since builds have no CI-style stages) — reuses
+    // cardHeight's already-tuned value rather than guessing a new one.
+    private let testflightCardHeight: CGFloat = 130
     private let cardSpacing: CGFloat = 8
     private let headerHeight: CGFloat = 70
     private let footerHeight: CGFloat = 44

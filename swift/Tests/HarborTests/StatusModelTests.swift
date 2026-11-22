@@ -139,7 +139,7 @@ final class StatusModelTests: XCTestCase {
     func makeTestFlight(processing: ProcessingState, review: BetaReviewStatus?, fetchError: String? = nil) -> TestFlightStatus {
         TestFlightStatus(name: "ExampleApp", bundleId: "com.example.app", processingState: processing,
                           betaReviewStatus: review, buildVersion: "1.0", buildNumber: "42",
-                          url: "", updatedAt: "", fetchedAt: "", fetchError: fetchError)
+                          url: "", updatedAt: "", fetchedAt: "", fetchError: fetchError, history: nil)
     }
 
     func testTestFlightStateMapping() {
@@ -165,6 +165,26 @@ final class StatusModelTests: XCTestCase {
         let missingKey = makeTestFlight(processing: .valid, review: .approved, fetchError: "missing_key")
         XCTAssertEqual(missingKey.state, .authError)
         XCTAssertEqual(missingKey.label, "No ASC key configured")
+    }
+
+    /// Same missing-key lesson as elsewhere in this file: apple.sh's own
+    /// fallback entries (auth error, missing key, no-builds-yet) never set
+    /// "history" either, so this must decode cleanly without it.
+    func testTestFlightDecodingSucceedsWhenHistoryIsMissing() throws {
+        let json = """
+        {"name": "ExampleApp", "bundle_id": "com.example.app", "processing_state": "valid",
+         "beta_review_status": null, "build_version": "1.0", "build_number": "42",
+         "url": "", "updated_at": "", "fetched_at": ""}
+        """
+        let decoded = try JSONDecoder().decode(TestFlightStatus.self, from: Data(json.utf8))
+        XCTAssertEqual(decoded.recentHistory, [])
+    }
+
+    func testTestFlightHistoryEntryStateMapping() {
+        let entry = TestFlightHistoryEntry(processingState: .valid, betaReviewStatus: .rejected,
+                                            buildVersion: "1.0", buildNumber: "41", uploadedAt: "", url: "")
+        XCTAssertEqual(entry.state, .failed)
+        XCTAssertEqual(entry.label, "Build 1.0 (41): Valid · Review: Rejected")
     }
 
     /// Same missing-key lesson as history/current_step: a status.json with no

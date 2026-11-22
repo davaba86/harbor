@@ -113,6 +113,49 @@ enum BetaReviewStatus: String, Codable {
     }
 }
 
+/// One build in a TestFlight app's recent history (newest last, same
+/// picker convention as HistoryEntry/RepoCardView). Each build has no
+/// separate TestFlight deep link of its own, so `url` is just the app's
+/// TestFlight page, repeated — same value as the parent TestFlightStatus.
+struct TestFlightHistoryEntry: Codable, Equatable {
+    let processingState: ProcessingState
+    let betaReviewStatus: BetaReviewStatus?
+    let buildVersion: String
+    let buildNumber: String
+    let uploadedAt: String
+    let url: String
+
+    enum CodingKeys: String, CodingKey {
+        case processingState = "processing_state"
+        case betaReviewStatus = "beta_review_status"
+        case buildVersion = "build_version"
+        case buildNumber = "build_number"
+        case uploadedAt = "uploaded_at"
+        case url
+    }
+
+    var state: RunState {
+        switch processingState {
+        case .processing: return .running
+        case .failed, .invalid: return .failed
+        case .valid:
+            switch betaReviewStatus {
+            case .approved, .none: return .ok
+            case .rejected: return .failed
+            case .waitingForReview, .inReview: return .running
+            }
+        }
+    }
+
+    var label: String {
+        var parts = ["Build \(buildVersion) (\(buildNumber)): \(processingState.rawValue.capitalized)"]
+        if let betaReviewStatus {
+            parts.append("Review: \(betaReviewStatus.displayName)")
+        }
+        return parts.joined(separator: " · ")
+    }
+}
+
 /// TestFlight/App Store Connect doesn't fit RepoStatus's git-remote model at
 /// all (no path, no branch) and carries TWO independent status dimensions
 /// (build processing vs. beta review) instead of one — so it's its own type,
@@ -135,6 +178,10 @@ struct TestFlightStatus: Codable, Identifiable, Equatable {
     // every other sometimes-absent field here is: a real fetch's JSON
     // never includes this key at all.
     let fetchError: String?
+    // Last few builds (oldest first, same convention as RepoStatus.history),
+    // for apps that release more than one build at a time — poll.sh's
+    // fallback entries never populate this, same reasoning as elsewhere.
+    let history: [TestFlightHistoryEntry]?
 
     enum CodingKeys: String, CodingKey {
         case name
@@ -147,7 +194,10 @@ struct TestFlightStatus: Codable, Identifiable, Equatable {
         case updatedAt = "updated_at"
         case fetchedAt = "fetched_at"
         case fetchError = "fetch_error"
+        case history
     }
+
+    var recentHistory: [TestFlightHistoryEntry] { history ?? [] }
 
     var state: RunState {
         if fetchError != nil { return .authError }
