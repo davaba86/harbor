@@ -10,6 +10,7 @@
 set -uo pipefail
 cd "$(dirname "$0")"
 source lib/common.sh
+source lib/apple.sh
 
 HARBOR_DIR="${HARBOR_DIR:-$HOME/.harbor}"
 CONFIG="$HARBOR_DIR/config.json"
@@ -104,6 +105,50 @@ for i in $(seq 0 $((repo_count - 1))); do
   entries=$(echo "$entries" | jq --argjson e "$entry" '. + [$e]')
 done
 
-jq -n --arg generated_at "$(date -u +%FT%TZ)" --argjson repos "$entries" \
-  '{generated_at: $generated_at, repos: $repos}' > "$TMP_FILE"
+# poll::fetch_apple_one <name> <bundle_id> <key_id> <issuer_id>
+# Same fallback contract as poll::fetch_one above: auth error and missing
+# key surface immediately as their own state, any other failure keeps the
+# last-known entry (or "stale" if there's no prior entry to keep).
+poll::fetch_apple_one() {
+  local name="$1" bundle_id="$2" key_id="$3" issuer_id="$4"
+  local result fetch_status now entry
+
+  result=$(harbor::fetch_apple "$name" "$bundle_id" "$key_id" "$issuer_id")
+  fetch_status=$?
+  now=$(date -u +%FT%TZ)
+
+  if [ "$fetch_status" -eq 2 ]; then
+    entry=$(jq -n --arg name "$name" --arg bundle_id "$bundle_id" \
+      '{name: $name, bundle_id: $bundle_id, processing_state: "invalid", beta_review_status: null, build_version: "", build_number: "", url: "", updated_at: "", fetch_error: "auth"}')
+  elif [ "$fetch_status" -eq 3 ]; then
+    echo "$now [$name] no ASC key on disk for key_id $key_id" >> "$ERROR_LOG"
+    entry=$(jq -n --arg name "$name" --arg bundle_id "$bundle_id" \
+      '{name: $name, bundle_id: $bundle_id, processing_state: "invalid", beta_review_status: null, build_version: "", build_number: "", url: "", updated_at: "", fetch_error: "missing_key"}')
+  elif [ "$fetch_status" -ne 0 ] || [ -z "$result" ]; then
+    echo "$now [$name] apple fetch failed, keeping last known state" >> "$ERROR_LOG"
+    entry=$(echo "$prev_status" | jq --arg name "$name" '.testflight[]? | select(.name == $name)')
+    [ -z "$entry" ] && entry=$(jq -n --arg name "$name" --arg bundle_id "$bundle_id" \
+      '{name: $name, bundle_id: $bundle_id, processing_state: "invalid", beta_review_status: null, build_version: "", build_number: "", url: "", updated_at: ""}')
+  else
+    entry="$result"
+  fi
+
+  echo "$entry" | jq --arg fetched_at "$now" '. + {fetched_at: $fetched_at}'
+}
+
+testflight_entries="[]"
+apple_count=$(jq '.apple_apps // [] | length' "$CONFIG")
+
+for i in $(seq 0 $((apple_count - 1))); do
+  name=$(jq -r ".apple_apps[$i].name" "$CONFIG")
+  bundle_id=$(jq -r ".apple_apps[$i].bundle_id" "$CONFIG")
+  key_id=$(jq -r ".apple_apps[$i].key_id" "$CONFIG")
+  issuer_id=$(jq -r ".apple_apps[$i].issuer_id" "$CONFIG")
+  entry=$(poll::fetch_apple_one "$name" "$bundle_id" "$key_id" "$issuer_id")
+  [ -z "$entry" ] && continue
+  testflight_entries=$(echo "$testflight_entries" | jq --argjson e "$entry" '. + [$e]')
+done
+
+jq -n --arg generated_at "$(date -u +%FT%TZ)" --argjson repos "$entries" --argjson testflight "$testflight_entries" \
+  '{generated_at: $generated_at, repos: $repos, testflight: $testflight}' > "$TMP_FILE"
 mv "$TMP_FILE" "$STATUS_FILE"

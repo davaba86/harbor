@@ -2,5 +2,8 @@
   "interval_seconds": 60,
   "repos": [
     { "name": "example-repo", "path": "/Users/you/git-repos/example-repo" }
+  ],
+  "apple_apps": [
+    { "name": "Example App", "bundle_id": "com.example.app", "key_id": "ABC123XYZ", "issuer_id": "11111111-2222-3333-4444-555555555555" }
   ]
 }
