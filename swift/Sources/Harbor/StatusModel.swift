@@ -128,6 +128,13 @@ struct TestFlightStatus: Codable, Identifiable, Equatable {
     let url: String
     let updatedAt: String
     let fetchedAt: String
+    // "auth" (App Store Connect key rejected) or "missing_key" (no .p8 on
+    // disk for the configured key_id) — set only by poll.sh's fallback
+    // entries, never by a real fetch, so it must win over processingState
+    // in both `state` and `label` below. Optional for the same reason
+    // every other sometimes-absent field here is: a real fetch's JSON
+    // never includes this key at all.
+    let fetchError: String?
 
     enum CodingKeys: String, CodingKey {
         case name
@@ -139,9 +146,11 @@ struct TestFlightStatus: Codable, Identifiable, Equatable {
         case url
         case updatedAt = "updated_at"
         case fetchedAt = "fetched_at"
+        case fetchError = "fetch_error"
     }
 
     var state: RunState {
+        if fetchError != nil { return .authError }
         switch processingState {
         case .processing: return .running
         case .failed, .invalid: return .failed
@@ -155,6 +164,9 @@ struct TestFlightStatus: Codable, Identifiable, Equatable {
     }
 
     var label: String {
+        if let fetchError {
+            return fetchError == "missing_key" ? "No ASC key configured" : "Auth"
+        }
         var parts = ["Build \(buildVersion) (\(buildNumber)): \(processingState.rawValue.capitalized)"]
         if let betaReviewStatus {
             parts.append("Review: \(betaReviewStatus.displayName)")

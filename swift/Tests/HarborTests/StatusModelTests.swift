@@ -136,10 +136,10 @@ final class StatusModelTests: XCTestCase {
         XCTAssertEqual(entry.stageList, stages)
     }
 
-    func makeTestFlight(processing: ProcessingState, review: BetaReviewStatus?) -> TestFlightStatus {
+    func makeTestFlight(processing: ProcessingState, review: BetaReviewStatus?, fetchError: String? = nil) -> TestFlightStatus {
         TestFlightStatus(name: "ExampleApp", bundleId: "com.example.app", processingState: processing,
                           betaReviewStatus: review, buildVersion: "1.0", buildNumber: "42",
-                          url: "", updatedAt: "", fetchedAt: "")
+                          url: "", updatedAt: "", fetchedAt: "", fetchError: fetchError)
     }
 
     func testTestFlightStateMapping() {
@@ -152,6 +152,19 @@ final class StatusModelTests: XCTestCase {
         XCTAssertEqual(makeTestFlight(processing: .valid, review: .rejected).state, .failed)
         XCTAssertEqual(makeTestFlight(processing: .valid, review: .waitingForReview).state, .running)
         XCTAssertEqual(makeTestFlight(processing: .valid, review: .inReview).state, .running)
+    }
+
+    func testTestFlightFetchErrorOverridesProcessingState() {
+        // poll.sh's fallback entries set a placeholder processingState
+        // alongside fetch_error — fetchError must win regardless, same as
+        // RunState.authError pre-empts a repo's own pipeline state.
+        let authError = makeTestFlight(processing: .valid, review: .approved, fetchError: "auth")
+        XCTAssertEqual(authError.state, .authError)
+        XCTAssertEqual(authError.label, "Auth")
+
+        let missingKey = makeTestFlight(processing: .valid, review: .approved, fetchError: "missing_key")
+        XCTAssertEqual(missingKey.state, .authError)
+        XCTAssertEqual(missingKey.label, "No ASC key configured")
     }
 
     /// Same missing-key lesson as history/current_step: a status.json with no
