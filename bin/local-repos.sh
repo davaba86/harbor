@@ -2,7 +2,9 @@
 # Harbor local-repos report: for every repo in ~/.harbor/config.json,
 # lists branches already merged into the default branch and worktrees git
 # itself reports as prunable. Entirely local (no network, no gh/glab) —
-# run on demand when the Local Repos tab opens, not on the poll cycle.
+# called by poll.sh every cycle and cached into status.json's local_repos
+# key, same as repos/testflight, so the Local Repos tab reads instantly
+# instead of recomputing on every open.
 #
 # Usage: local-repos.sh
 # Output: one JSON array on stdout, one entry per configured repo

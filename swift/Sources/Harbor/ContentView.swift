@@ -327,9 +327,20 @@ struct RepoCardView: View {
         }
     }
 
+/// Same left-column picker over recent runs RepoCardView uses, minus the
+/// stage breakdown (builds have no CI-style stages) — lets an app that
+/// shipped several builds at once show which ones are stuck vs. fine,
+/// instead of only ever showing the newest.
 struct TestFlightCardView: View {
     let app: TestFlightStatus
     let staleThreshold: Int
+    @State private var selectedIndex: Int
+
+    init(app: TestFlightStatus, staleThreshold: Int) {
+        self.app = app
+        self.staleThreshold = staleThreshold
+        _selectedIndex = State(initialValue: max(app.recentHistory.count - 1, 0))
+    }
 
     var display: DisplayState { DisplayState.compute(testflight: app, staleThreshold: staleThreshold) }
 
@@ -339,7 +350,7 @@ struct TestFlightCardView: View {
                 .fill(display.state.color)
                 .frame(width: 4)
 
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .top) {
                     // paperplane badge distinguishes this at a glance as a
                     // TestFlight/App Store entry, not a git-based pipeline.
@@ -351,23 +362,77 @@ struct TestFlightCardView: View {
                         .fontWeight(.semibold)
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer()
+                    if let entryUrl = app.recentHistory.indices.contains(selectedIndex) ? app.recentHistory[selectedIndex].url : nil,
+                       !entryUrl.isEmpty {
+                        Button(action: {
+                            if let url = URL(string: entryUrl) { NSWorkspace.shared.open(url) }
+                        }) {
+                            Image(systemName: "arrow.up.right.square")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Open in App Store Connect")
+                    }
                     StatusBadge(state: display.state)
                 }
 
-                Text("\(app.label) · \(formatAge(display.ageSeconds))")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                if app.recentHistory.isEmpty {
+                    Text("\(app.label) · \(formatAge(display.ageSeconds))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    HStack(alignment: .top, spacing: 10) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            ForEach(Array(app.recentHistory.enumerated()), id: \.offset) { idx, entry in
+                                let isNewest = idx == app.recentHistory.count - 1
+                                Button(action: { selectedIndex = idx }) {
+                                    HStack(spacing: 6) {
+                                        Circle().fill(entry.state.color).frame(width: 7, height: 7)
+                                        Text(isNewest ? "Latest" : "Build \(idx + 1)")
+                                            .font(.caption2)
+                                    }
+                                    .padding(.vertical, 3)
+                                    .padding(.horizontal, 6)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(idx == selectedIndex ? Color.secondary.opacity(0.2) : .clear)
+                                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .frame(width: 74)
+
+                        Divider()
+
+                        if app.recentHistory.indices.contains(selectedIndex) {
+                            let entry = app.recentHistory[selectedIndex]
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack(spacing: 5) {
+                                    Image(systemName: entry.state.symbol)
+                                        .foregroundStyle(entry.state.color)
+                                    Text(entry.label)
+                                        .font(.caption)
+                                        .fontWeight(.semibold)
+                                }
+                                // Real build age (when THIS build was
+                                // uploaded), distinct from the card's own
+                                // badge above (which reflects polling
+                                // freshness via `display.ageSeconds`).
+                                Text("Uploaded \(formatAge(DisplayState.ageSeconds(fetchedAt: entry.uploadedAt)))")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                }
             }
             .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(Color(nsColor: .controlBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 12))
-        .contentShape(Rectangle())
-        .onTapGesture {
-            if let url = URL(string: app.url), !app.url.isEmpty {
-                NSWorkspace.shared.open(url)
-            }
-        }
     }
 }
 
@@ -378,24 +443,20 @@ enum HarborTab: String, CaseIterable {
 }
 
 /// Local-only git-hygiene report: locally merged branches + prunable
-/// worktrees per repo, read-only. Fetched on demand (see
-/// AppDelegate.loadLocalRepos) when this tab is selected, not on the
-/// regular poll cycle — no delete/prune action anywhere here, matching
-/// Harbor's "report, don't act" posture for branch/worktree lifecycle.
+/// worktrees per repo, read-only. Cached by poll.sh on the normal cycle
+/// now (bin/local-repos.sh), same as repos/testflight, so this just reads
+/// status.json instead of fetching on demand — no delete/prune action
+/// anywhere here, matching Harbor's "report, don't act" posture for
+/// branch/worktree lifecycle.
 struct LocalReposView: View {
     let reports: [RepoBranchReport]
-    let isLoading: Bool
 
     private var flagged: [RepoBranchReport] {
         reports.filter { !$0.mergedBranches.isEmpty || !$0.prunableWorktrees.isEmpty }
     }
 
     var body: some View {
-        if isLoading {
-            ProgressView().controlSize(.small)
-                .frame(maxWidth: .infinity)
-                .padding(.top, 20)
-        } else if flagged.isEmpty {
+        if flagged.isEmpty {
             Text("Nothing to clean up")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -457,9 +518,6 @@ struct ContentView: View {
     let onOpenLog: () -> Void
     let onRefreshAll: () -> Void
     let onRefreshRepo: (String) -> Void
-    let onLocalReposTabSelected: () -> Void
-    let localRepoReports: [RepoBranchReport]
-    let isLoadingLocalRepos: Bool
     // Real post-filter/post-collapse counts, so AppDelegate can size the
     // panel arithmetically instead of asking SwiftUI's sizeThatFits for a
     // "natural" height through a ScrollView — a ScrollView always reports
@@ -469,8 +527,13 @@ struct ContentView: View {
     // entirely. The tab is included so AppDelegate knows which sizing rule
     // applies (e.g. Local Repos ignores these counts and uses a fixed
     // height) — it reads only the counts relevant to that tab.
-    let onContentSizeMightHaveChanged: (_ tab: HarborTab, _ expandedCount: Int, _ collapsedCount: Int, _ testflightCount: Int) -> Void
-    @State private var selectedTab: HarborTab = .cicd
+    // Apple tab's third param is each VISIBLE app's history-row count (not a
+    // flat app count) — a 1-build app and a 3-build app need different
+    // panel height, same reasoning CI/CD already applies by splitting
+    // expanded vs. collapsed counts instead of one flat repo count.
+    let onContentSizeMightHaveChanged: (_ tab: HarborTab, _ expandedCount: Int, _ collapsedCount: Int, _ testflightRowCounts: [Int]) -> Void
+    private static let selectedTabKey = "harbor.selectedTab"
+    @State private var selectedTab: HarborTab = HarborTab(rawValue: UserDefaults.standard.string(forKey: ContentView.selectedTabKey) ?? "") ?? .cicd
     @State private var searchText = ""
     @State private var errorsOnly = true
 
@@ -479,8 +542,9 @@ struct ContentView: View {
     }
 
     var body: some View {
-        let visibleRepos = (status?.repos ?? []).filter { matches($0.name) }
+        let visibleRepos = sortedRunningFirst((status?.repos ?? []).filter { matches($0.name) }, staleThreshold: staleThreshold)
         let visibleTestflightApps = status?.testflightApps ?? []
+        let testflightRowCounts = visibleTestflightApps.map { max($0.recentHistory.count, 1) }
         let collapsedCount = visibleRepos.filter { errorsOnly && DisplayState.compute(repo: $0, staleThreshold: staleThreshold).state == .ok }.count
         let expandedCount = visibleRepos.count - collapsedCount
 
@@ -584,7 +648,7 @@ struct ContentView: View {
                     }
                 }
             } else {
-                LocalReposView(reports: localRepoReports, isLoading: isLoadingLocalRepos)
+                LocalReposView(reports: status?.localRepoReports ?? [])
             }
 
             Divider()
@@ -606,14 +670,14 @@ struct ContentView: View {
         // time they could have changed (including first appearance, since
         // errorsOnly defaults to true so even the FIRST render is already
         // filtered) so it can size the panel correctly.
-        .onAppear { onContentSizeMightHaveChanged(selectedTab, expandedCount, collapsedCount, visibleTestflightApps.count) }
-        .onChange(of: errorsOnly) { _ in onContentSizeMightHaveChanged(selectedTab, expandedCount, collapsedCount, visibleTestflightApps.count) }
-        .onChange(of: searchText) { _ in onContentSizeMightHaveChanged(selectedTab, expandedCount, collapsedCount, visibleTestflightApps.count) }
-        .onChange(of: status?.repos.count) { _ in onContentSizeMightHaveChanged(selectedTab, expandedCount, collapsedCount, visibleTestflightApps.count) }
-        .onChange(of: status?.testflightApps.count) { _ in onContentSizeMightHaveChanged(selectedTab, expandedCount, collapsedCount, visibleTestflightApps.count) }
+        .onAppear { onContentSizeMightHaveChanged(selectedTab, expandedCount, collapsedCount, testflightRowCounts) }
+        .onChange(of: errorsOnly) { _ in onContentSizeMightHaveChanged(selectedTab, expandedCount, collapsedCount, testflightRowCounts) }
+        .onChange(of: searchText) { _ in onContentSizeMightHaveChanged(selectedTab, expandedCount, collapsedCount, testflightRowCounts) }
+        .onChange(of: status?.repos.count) { _ in onContentSizeMightHaveChanged(selectedTab, expandedCount, collapsedCount, testflightRowCounts) }
+        .onChange(of: status?.testflightApps.count) { _ in onContentSizeMightHaveChanged(selectedTab, expandedCount, collapsedCount, testflightRowCounts) }
         .onChange(of: selectedTab) { newTab in
-            if newTab == .localRepos { onLocalReposTabSelected() }
-            onContentSizeMightHaveChanged(newTab, expandedCount, collapsedCount, visibleTestflightApps.count)
+            UserDefaults.standard.set(newTab.rawValue, forKey: ContentView.selectedTabKey)
+            onContentSizeMightHaveChanged(newTab, expandedCount, collapsedCount, testflightRowCounts)
         }
     }
 }

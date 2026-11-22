@@ -113,6 +113,49 @@ enum BetaReviewStatus: String, Codable {
     }
 }
 
+/// One build in a TestFlight app's recent history (newest last, same
+/// picker convention as HistoryEntry/RepoCardView). Each build has no
+/// separate TestFlight deep link of its own, so `url` is just the app's
+/// TestFlight page, repeated — same value as the parent TestFlightStatus.
+struct TestFlightHistoryEntry: Codable, Equatable {
+    let processingState: ProcessingState
+    let betaReviewStatus: BetaReviewStatus?
+    let buildVersion: String
+    let buildNumber: String
+    let uploadedAt: String
+    let url: String
+
+    enum CodingKeys: String, CodingKey {
+        case processingState = "processing_state"
+        case betaReviewStatus = "beta_review_status"
+        case buildVersion = "build_version"
+        case buildNumber = "build_number"
+        case uploadedAt = "uploaded_at"
+        case url
+    }
+
+    var state: RunState {
+        switch processingState {
+        case .processing: return .running
+        case .failed, .invalid: return .failed
+        case .valid:
+            switch betaReviewStatus {
+            case .approved, .none: return .ok
+            case .rejected: return .failed
+            case .waitingForReview, .inReview: return .running
+            }
+        }
+    }
+
+    var label: String {
+        var parts = ["Build \(buildVersion) (\(buildNumber)): \(processingState.rawValue.capitalized)"]
+        if let betaReviewStatus {
+            parts.append("Review: \(betaReviewStatus.displayName)")
+        }
+        return parts.joined(separator: " · ")
+    }
+}
+
 /// TestFlight/App Store Connect doesn't fit RepoStatus's git-remote model at
 /// all (no path, no branch) and carries TWO independent status dimensions
 /// (build processing vs. beta review) instead of one — so it's its own type,
@@ -135,6 +178,10 @@ struct TestFlightStatus: Codable, Identifiable, Equatable {
     // every other sometimes-absent field here is: a real fetch's JSON
     // never includes this key at all.
     let fetchError: String?
+    // Last few builds (oldest first, same convention as RepoStatus.history),
+    // for apps that release more than one build at a time — poll.sh's
+    // fallback entries never populate this, same reasoning as elsewhere.
+    let history: [TestFlightHistoryEntry]?
 
     enum CodingKeys: String, CodingKey {
         case name
@@ -147,7 +194,10 @@ struct TestFlightStatus: Codable, Identifiable, Equatable {
         case updatedAt = "updated_at"
         case fetchedAt = "fetched_at"
         case fetchError = "fetch_error"
+        case history
     }
+
+    var recentHistory: [TestFlightHistoryEntry] { history ?? [] }
 
     var state: RunState {
         if fetchError != nil { return .authError }
@@ -181,14 +231,19 @@ struct HarborStatus: Codable {
     // Optional from the start — same lesson as RepoStatus.history: a key
     // that's only sometimes present must never break decoding everything else.
     let testflight: [TestFlightStatus]?
+    // Cached by poll.sh on the normal cycle now (bin/local-repos.sh), not
+    // fetched on demand when the tab opens — same reasoning as testflight.
+    let localRepos: [RepoBranchReport]?
 
     enum CodingKeys: String, CodingKey {
         case generatedAt = "generated_at"
         case repos
         case testflight
+        case localRepos = "local_repos"
     }
 
     var testflightApps: [TestFlightStatus] { testflight ?? [] }
+    var localRepoReports: [RepoBranchReport] { localRepos ?? [] }
 }
 
 /// A repo's state as actually displayed, after applying the staleness rule:
@@ -249,6 +304,20 @@ enum WorstState {
         if displayStates.contains(.running) { return .running }
         if displayStates.contains(.stale) { return .stale }
         return .ok
+    }
+}
+
+/// Floats repos with a currently-running pipeline to the top so one you're
+/// watching doesn't get lost further down the list — a stable sort, so
+/// everything else (including a repo that just stopped running) keeps its
+/// config order underneath instead of jumping around. No separate "pin"
+/// state to set or clear: a repo leaves the top on its own, the instant
+/// its own real state stops being .running.
+func sortedRunningFirst(_ repos: [RepoStatus], staleThreshold: Int, now: Date = Date()) -> [RepoStatus] {
+    repos.sorted { a, b in
+        let aRunning = DisplayState.compute(repo: a, staleThreshold: staleThreshold, now: now).state == .running
+        let bRunning = DisplayState.compute(repo: b, staleThreshold: staleThreshold, now: now).state == .running
+        return aRunning && !bRunning
     }
 }
 

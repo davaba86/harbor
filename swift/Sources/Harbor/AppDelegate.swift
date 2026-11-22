@@ -24,8 +24,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var lastTestflightApps: [TestFlightStatus] = []
     private var isRefreshing = false
     private var refreshingRepoNames: Set<String> = []
-    private var localRepoReports: [RepoBranchReport] = []
-    private var isLoadingLocalRepos = false
     private let statusPath = NSString(string: "~/.harbor/status.json").expandingTildeInPath
     private let configPath = NSString(string: "~/.harbor/config.json").expandingTildeInPath
     private let logPath = NSString(string: "~/.harbor/app.log").expandingTildeInPath
@@ -48,7 +46,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     // card. Driven by real counts from ContentView now, not a guess.
     private let cardHeight: CGFloat = 130
     private let collapsedCardHeight: CGFloat = 44
-    private let testflightCardHeight: CGFloat = 60
+    // A TestFlight card's height depends on its OWN history-row count (1
+    // to 3 builds), not a single flat guess the way repo cards can use one
+    // — a 1-build app and a 3-build app genuinely render at different
+    // heights. Base covers the title row + detail pane (roughly a 1-row
+    // card); each additional picker row adds its own real height on top.
+    private let testflightBaseHeight: CGFloat = 96
+    private let testflightHistoryRowHeight: CGFloat = 23
     private let cardSpacing: CGFloat = 8
     private let headerHeight: CGFloat = 70
     private let footerHeight: CGFloat = 44
@@ -91,6 +95,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         return headerHeight + cardsHeight + spacingHeight + footerHeight
     }
 
+    /// Height for one Apple-tab card given its own history-row count.
+    private func testflightCardHeight(rows: Int) -> CGFloat {
+        testflightBaseHeight + CGFloat(max(rows - 1, 0)) * testflightHistoryRowHeight
+    }
+
+    /// Height for the Apple tab: each app's card sized to its OWN
+    /// history-row count rather than one flat per-app guess, capped at
+    /// maxVisibleRows apps shown (same cap rule as the other tabs, just
+    /// not scaled down past it — a pathological number of configured
+    /// Apple apps is unlikely enough that the inner ScrollView handling
+    /// the overflow is good enough, matching Local Repos' own tradeoff).
+    private func testflightHeight(rowCounts: [Int]) -> CGFloat {
+        guard !rowCounts.isEmpty else { return headerHeight + emptyStateHeight + footerHeight }
+        let shown = rowCounts.prefix(maxVisibleRows)
+        let cardsHeight = shown.reduce(CGFloat(0)) { $0 + testflightCardHeight(rows: $1) }
+        let spacingHeight = CGFloat(max(shown.count - 1, 0)) * cardSpacing
+        return headerHeight + cardsHeight + spacingHeight + footerHeight
+    }
+
     /// Height for a CI/CD-shaped mix of expanded + collapsed rows, same
     /// maxVisibleRows cap as rowsHeight but scaled jointly across both
     /// shapes so "10 items" counts expanded and collapsed rows the same way.
@@ -107,11 +130,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     /// Real target panel height for whichever tab is active — see the
     /// per-tab helpers above for why each one sizes differently.
-    private func targetContentHeight(tab: HarborTab, expandedCount: Int, collapsedCount: Int, testflightCount: Int) -> CGFloat {
+    private func targetContentHeight(tab: HarborTab, expandedCount: Int, collapsedCount: Int, testflightRowCounts: [Int]) -> CGFloat {
         let height: CGFloat
         switch tab {
         case .cicd: height = cicdHeight(expandedCount: expandedCount, collapsedCount: collapsedCount)
-        case .apple: height = rowsHeight(count: testflightCount, rowHeight: testflightCardHeight)
+        case .apple: height = testflightHeight(rowCounts: testflightRowCounts)
         case .localRepos: height = localReposHeight
         }
         return max(height, panel.minSize.height)
@@ -215,11 +238,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                                    onOpenLog: { [weak self] in self?.openLog() },
                                    onRefreshAll: { [weak self] in self?.refreshAllNow() },
                                    onRefreshRepo: { [weak self] name in self?.refreshRepoNow(name) },
-                                   onLocalReposTabSelected: { [weak self] in self?.loadLocalRepos() },
-                                   localRepoReports: [],
-                                   isLoadingLocalRepos: false,
                                    onContentSizeMightHaveChanged: { [weak self] tab, expanded, collapsed, tf in
-                                       self?.adjustHeight(tab: tab, expandedCount: expanded, collapsedCount: collapsed, testflightCount: tf)
+                                       self?.adjustHeight(tab: tab, expandedCount: expanded, collapsedCount: collapsed, testflightRowCounts: tf)
                                    })
         )
         panel.contentViewController = hostingController
@@ -285,11 +305,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                                                   onOpenLog: { [weak self] in self?.openLog() },
                                                   onRefreshAll: { [weak self] in self?.refreshAllNow() },
                                                   onRefreshRepo: { [weak self] name in self?.refreshRepoNow(name) },
-                                                  onLocalReposTabSelected: { [weak self] in self?.loadLocalRepos() },
-                                                  localRepoReports: localRepoReports,
-                                                  isLoadingLocalRepos: isLoadingLocalRepos,
                                                   onContentSizeMightHaveChanged: { [weak self] tab, expanded, collapsed, tf in
-                                                      self?.adjustHeight(tab: tab, expandedCount: expanded, collapsedCount: collapsed, testflightCount: tf)
+                                                      self?.adjustHeight(tab: tab, expandedCount: expanded, collapsedCount: collapsed, testflightRowCounts: tf)
                                                   })
     }
 
@@ -304,9 +321,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// decoupling is what fixed the original grow-then-shrink flicker bug,
     /// and this path is opt-in (only fired by deliberate toggle/search/open
     /// interaction in ContentView), not automatic background refresh.
-    private func adjustHeight(tab: HarborTab, expandedCount: Int, collapsedCount: Int, testflightCount: Int) {
+    private func adjustHeight(tab: HarborTab, expandedCount: Int, collapsedCount: Int, testflightRowCounts: [Int]) {
         guard panel.isVisible else { return }
-        let targetHeight = targetContentHeight(tab: tab, expandedCount: expandedCount, collapsedCount: collapsedCount, testflightCount: testflightCount)
+        let targetHeight = targetContentHeight(tab: tab, expandedCount: expandedCount, collapsedCount: collapsedCount, testflightRowCounts: testflightRowCounts)
         guard abs(targetHeight - panel.frame.height) > 1 else { return }
 
         var frame = panel.frame
@@ -386,52 +403,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
-    /// Runs bin/local-repos.sh and parses its JSON into localRepoReports.
-    /// Called every time the Local Repos tab is selected (on-demand, no
-    /// caching) — it's a local git operation, not a network fetch, so
-    /// there's no cost reason to cache it. Read-only report: nothing here
-    /// deletes or prunes anything.
-    private func loadLocalRepos() {
-        guard !isLoadingLocalRepos, let repoDir else {
-            harborLog("loadLocalRepos: skipped (isLoadingLocalRepos=\(isLoadingLocalRepos) repoDir=\(repoDir ?? "nil"))")
-            return
-        }
-        isLoadingLocalRepos = true
-        refresh()
-
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/bin/bash")
-            process.arguments = ["-c", "\"$1/bin/local-repos.sh\"", "bash", repoDir]
-            let stdout = Pipe()
-            process.standardOutput = stdout
-
-            var reports: [RepoBranchReport] = []
-            do {
-                try process.run()
-                let data = stdout.fileHandleForReading.readDataToEndOfFile()
-                process.waitUntilExit()
-                if process.terminationStatus == 0 {
-                    do {
-                        reports = try JSONDecoder().decode([RepoBranchReport].self, from: data)
-                    } catch {
-                        harborLog("loadLocalRepos: decode failed for local-repos.sh output: \(error)")
-                    }
-                } else {
-                    harborLog("loadLocalRepos: local-repos.sh exited \(process.terminationStatus)")
-                }
-            } catch {
-                harborLog("loadLocalRepos: failed to launch process: \(error)")
-            }
-
-            DispatchQueue.main.async {
-                self?.isLoadingLocalRepos = false
-                self?.localRepoReports = reports
-                self?.refresh()
-            }
-        }
-    }
-
     /// Reveals the config file in Finder. Resolves through the symlink first
     /// when HARBOR_DOTFILES_CONFIG mode is active, so this always points at
     /// the real editable file rather than just the ~/.harbor symlink.
@@ -478,7 +449,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // if the real active tab differs, ContentView's onAppear reports
         // the real counts right after and adjustHeight corrects it.
         var frame = panel.frame
-        frame.size.height = targetContentHeight(tab: .cicd, expandedCount: expanded, collapsedCount: collapsed, testflightCount: 0)
+        frame.size.height = targetContentHeight(tab: .cicd, expandedCount: expanded, collapsedCount: collapsed, testflightRowCounts: [])
         frame.size.width = idealContentWidth(repoNames: lastRepoNames, repos: lastRepos)
         panel.setFrame(frame, display: false)
 

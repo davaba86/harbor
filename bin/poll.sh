@@ -149,6 +149,13 @@ for i in $(seq 0 $((apple_count - 1))); do
   testflight_entries=$(echo "$testflight_entries" | jq --argjson e "$entry" '. + [$e]')
 done
 
-jq -n --arg generated_at "$(date -u +%FT%TZ)" --argjson repos "$entries" --argjson testflight "$testflight_entries" \
-  '{generated_at: $generated_at, repos: $repos, testflight: $testflight}' > "$TMP_FILE"
+# Local Repos report, cached here on the normal poll cycle instead of
+# computed on demand every time the tab opens — it's a pure local git
+# operation (no network), cheap enough to run alongside the rest of this
+# cycle, and this way the tab reads instantly instead of waiting on a
+# fresh `git worktree list` + branch-merge check per repo every open.
+local_repos_entries=$(./local-repos.sh)
+
+jq -n --arg generated_at "$(date -u +%FT%TZ)" --argjson repos "$entries" --argjson testflight "$testflight_entries" --argjson local_repos "$local_repos_entries" \
+  '{generated_at: $generated_at, repos: $repos, testflight: $testflight, local_repos: $local_repos}' > "$TMP_FILE"
 mv "$TMP_FILE" "$STATUS_FILE"
