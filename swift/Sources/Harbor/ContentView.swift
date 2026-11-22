@@ -443,24 +443,20 @@ enum HarborTab: String, CaseIterable {
 }
 
 /// Local-only git-hygiene report: locally merged branches + prunable
-/// worktrees per repo, read-only. Fetched on demand (see
-/// AppDelegate.loadLocalRepos) when this tab is selected, not on the
-/// regular poll cycle — no delete/prune action anywhere here, matching
-/// Harbor's "report, don't act" posture for branch/worktree lifecycle.
+/// worktrees per repo, read-only. Cached by poll.sh on the normal cycle
+/// now (bin/local-repos.sh), same as repos/testflight, so this just reads
+/// status.json instead of fetching on demand — no delete/prune action
+/// anywhere here, matching Harbor's "report, don't act" posture for
+/// branch/worktree lifecycle.
 struct LocalReposView: View {
     let reports: [RepoBranchReport]
-    let isLoading: Bool
 
     private var flagged: [RepoBranchReport] {
         reports.filter { !$0.mergedBranches.isEmpty || !$0.prunableWorktrees.isEmpty }
     }
 
     var body: some View {
-        if isLoading {
-            ProgressView().controlSize(.small)
-                .frame(maxWidth: .infinity)
-                .padding(.top, 20)
-        } else if flagged.isEmpty {
+        if flagged.isEmpty {
             Text("Nothing to clean up")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -522,9 +518,6 @@ struct ContentView: View {
     let onOpenLog: () -> Void
     let onRefreshAll: () -> Void
     let onRefreshRepo: (String) -> Void
-    let onLocalReposTabSelected: () -> Void
-    let localRepoReports: [RepoBranchReport]
-    let isLoadingLocalRepos: Bool
     // Real post-filter/post-collapse counts, so AppDelegate can size the
     // panel arithmetically instead of asking SwiftUI's sizeThatFits for a
     // "natural" height through a ScrollView — a ScrollView always reports
@@ -534,8 +527,13 @@ struct ContentView: View {
     // entirely. The tab is included so AppDelegate knows which sizing rule
     // applies (e.g. Local Repos ignores these counts and uses a fixed
     // height) — it reads only the counts relevant to that tab.
-    let onContentSizeMightHaveChanged: (_ tab: HarborTab, _ expandedCount: Int, _ collapsedCount: Int, _ testflightCount: Int) -> Void
-    @State private var selectedTab: HarborTab = .cicd
+    // Apple tab's third param is each VISIBLE app's history-row count (not a
+    // flat app count) — a 1-build app and a 3-build app need different
+    // panel height, same reasoning CI/CD already applies by splitting
+    // expanded vs. collapsed counts instead of one flat repo count.
+    let onContentSizeMightHaveChanged: (_ tab: HarborTab, _ expandedCount: Int, _ collapsedCount: Int, _ testflightRowCounts: [Int]) -> Void
+    private static let selectedTabKey = "harbor.selectedTab"
+    @State private var selectedTab: HarborTab = HarborTab(rawValue: UserDefaults.standard.string(forKey: ContentView.selectedTabKey) ?? "") ?? .cicd
     @State private var searchText = ""
     @State private var errorsOnly = true
 
@@ -544,8 +542,9 @@ struct ContentView: View {
     }
 
     var body: some View {
-        let visibleRepos = (status?.repos ?? []).filter { matches($0.name) }
+        let visibleRepos = sortedRunningFirst((status?.repos ?? []).filter { matches($0.name) }, staleThreshold: staleThreshold)
         let visibleTestflightApps = status?.testflightApps ?? []
+        let testflightRowCounts = visibleTestflightApps.map { max($0.recentHistory.count, 1) }
         let collapsedCount = visibleRepos.filter { errorsOnly && DisplayState.compute(repo: $0, staleThreshold: staleThreshold).state == .ok }.count
         let expandedCount = visibleRepos.count - collapsedCount
 
@@ -649,7 +648,7 @@ struct ContentView: View {
                     }
                 }
             } else {
-                LocalReposView(reports: localRepoReports, isLoading: isLoadingLocalRepos)
+                LocalReposView(reports: status?.localRepoReports ?? [])
             }
 
             Divider()
@@ -671,14 +670,14 @@ struct ContentView: View {
         // time they could have changed (including first appearance, since
         // errorsOnly defaults to true so even the FIRST render is already
         // filtered) so it can size the panel correctly.
-        .onAppear { onContentSizeMightHaveChanged(selectedTab, expandedCount, collapsedCount, visibleTestflightApps.count) }
-        .onChange(of: errorsOnly) { _ in onContentSizeMightHaveChanged(selectedTab, expandedCount, collapsedCount, visibleTestflightApps.count) }
-        .onChange(of: searchText) { _ in onContentSizeMightHaveChanged(selectedTab, expandedCount, collapsedCount, visibleTestflightApps.count) }
-        .onChange(of: status?.repos.count) { _ in onContentSizeMightHaveChanged(selectedTab, expandedCount, collapsedCount, visibleTestflightApps.count) }
-        .onChange(of: status?.testflightApps.count) { _ in onContentSizeMightHaveChanged(selectedTab, expandedCount, collapsedCount, visibleTestflightApps.count) }
+        .onAppear { onContentSizeMightHaveChanged(selectedTab, expandedCount, collapsedCount, testflightRowCounts) }
+        .onChange(of: errorsOnly) { _ in onContentSizeMightHaveChanged(selectedTab, expandedCount, collapsedCount, testflightRowCounts) }
+        .onChange(of: searchText) { _ in onContentSizeMightHaveChanged(selectedTab, expandedCount, collapsedCount, testflightRowCounts) }
+        .onChange(of: status?.repos.count) { _ in onContentSizeMightHaveChanged(selectedTab, expandedCount, collapsedCount, testflightRowCounts) }
+        .onChange(of: status?.testflightApps.count) { _ in onContentSizeMightHaveChanged(selectedTab, expandedCount, collapsedCount, testflightRowCounts) }
         .onChange(of: selectedTab) { newTab in
-            if newTab == .localRepos { onLocalReposTabSelected() }
-            onContentSizeMightHaveChanged(newTab, expandedCount, collapsedCount, visibleTestflightApps.count)
+            UserDefaults.standard.set(newTab.rawValue, forKey: ContentView.selectedTabKey)
+            onContentSizeMightHaveChanged(newTab, expandedCount, collapsedCount, testflightRowCounts)
         }
     }
 }

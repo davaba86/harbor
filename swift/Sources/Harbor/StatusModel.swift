@@ -231,14 +231,19 @@ struct HarborStatus: Codable {
     // Optional from the start — same lesson as RepoStatus.history: a key
     // that's only sometimes present must never break decoding everything else.
     let testflight: [TestFlightStatus]?
+    // Cached by poll.sh on the normal cycle now (bin/local-repos.sh), not
+    // fetched on demand when the tab opens — same reasoning as testflight.
+    let localRepos: [RepoBranchReport]?
 
     enum CodingKeys: String, CodingKey {
         case generatedAt = "generated_at"
         case repos
         case testflight
+        case localRepos = "local_repos"
     }
 
     var testflightApps: [TestFlightStatus] { testflight ?? [] }
+    var localRepoReports: [RepoBranchReport] { localRepos ?? [] }
 }
 
 /// A repo's state as actually displayed, after applying the staleness rule:
@@ -299,6 +304,20 @@ enum WorstState {
         if displayStates.contains(.running) { return .running }
         if displayStates.contains(.stale) { return .stale }
         return .ok
+    }
+}
+
+/// Floats repos with a currently-running pipeline to the top so one you're
+/// watching doesn't get lost further down the list — a stable sort, so
+/// everything else (including a repo that just stopped running) keeps its
+/// config order underneath instead of jumping around. No separate "pin"
+/// state to set or clear: a repo leaves the top on its own, the instant
+/// its own real state stops being .running.
+func sortedRunningFirst(_ repos: [RepoStatus], staleThreshold: Int, now: Date = Date()) -> [RepoStatus] {
+    repos.sorted { a, b in
+        let aRunning = DisplayState.compute(repo: a, staleThreshold: staleThreshold, now: now).state == .running
+        let bRunning = DisplayState.compute(repo: b, staleThreshold: staleThreshold, now: now).state == .running
+        return aRunning && !bRunning
     }
 }
 

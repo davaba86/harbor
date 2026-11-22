@@ -2,8 +2,8 @@ import XCTest
 @testable import Harbor
 
 final class StatusModelTests: XCTestCase {
-    func makeRepo(state: RunState, fetchedAt: String) -> RepoStatus {
-        RepoStatus(name: "test-repo", platform: "gitlab", branch: "main",
+    func makeRepo(name: String = "test-repo", state: RunState, fetchedAt: String) -> RepoStatus {
+        RepoStatus(name: name, platform: "gitlab", branch: "main",
                    state: state, label: "x", url: "", updatedAt: "", fetchedAt: fetchedAt,
                    history: [], currentStep: nil)
     }
@@ -52,6 +52,35 @@ final class StatusModelTests: XCTestCase {
 
     func testWorstStatePriorityFailedBeatsEverything() {
         XCTAssertEqual(WorstState.compute([.ok, .running, .failed, .stale]), .failed)
+    }
+
+    func testSortedRunningFirstMovesRunningReposToTopKeepingOtherOrder() {
+        let now = Date()
+        let fresh = DisplayState.isoFormatter.string(from: now)
+        let repos = [
+            makeRepo(name: "a-ok", state: .ok, fetchedAt: fresh),
+            makeRepo(name: "b-running", state: .running, fetchedAt: fresh),
+            makeRepo(name: "c-failed", state: .failed, fetchedAt: fresh),
+            makeRepo(name: "d-running", state: .running, fetchedAt: fresh),
+        ]
+        let sorted = sortedRunningFirst(repos, staleThreshold: 180, now: now)
+        XCTAssertEqual(sorted.map(\.name), ["b-running", "d-running", "a-ok", "c-failed"],
+                       "both running repos move to the top, each group keeping its original relative order")
+    }
+
+    func testSortedRunningFirstIgnoresARunningRepoThatHasGoneStale() {
+        // A repo whose last fetch was "running" but is now past staleThreshold
+        // displays as .stale, not .running — it must not jump to the top on
+        // a stale read, same as it wouldn't show the running badge either.
+        let now = Date()
+        let staleFetch = DisplayState.isoFormatter.string(from: now.addingTimeInterval(-600))
+        let fresh = DisplayState.isoFormatter.string(from: now)
+        let repos = [
+            makeRepo(name: "a-ok", state: .ok, fetchedAt: fresh),
+            makeRepo(name: "b-stale-running", state: .running, fetchedAt: staleFetch),
+        ]
+        let sorted = sortedRunningFirst(repos, staleThreshold: 180, now: now)
+        XCTAssertEqual(sorted.map(\.name), ["a-ok", "b-stale-running"])
     }
 
     func testWorstStatePriorityAuthBeatsRunningAndStale() {
